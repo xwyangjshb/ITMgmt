@@ -62,7 +62,7 @@ namespace ITDeviceManager.API.Services
                 networkRanges.Add("192.168.0.1-254");
             }
 
-            // 用于跟踪本次扫描中已处理的MAC地址，避免重复插入
+            // 用于跟踪本次扫描中已处理的MAC地址，避免重复插入（使用规范化）
             var processedMacAddresses = new HashSet<string>();
             
             foreach (string? networkRange in networkRanges)
@@ -76,15 +76,26 @@ namespace ITDeviceManager.API.Services
                     {
                         try
                         {
+                            if (string.IsNullOrWhiteSpace(device.MACAddress))
+                            {
+                                _logger.LogWarning($"[后台服务] 跳过无MAC地址的设备: {device.Name} (IP: {device.IPAddress})");
+                                continue;
+                            }
+
+                            // 规范化 MAC 地址用于比较（去除分隔符并大写）
+                            var normalizedMac = device.MACAddress.Replace(":", "").Replace("-", "").Replace(" ", "").ToUpperInvariant();
+
                             // 检查本次扫描中是否已处理过此MAC地址
-                            if (processedMacAddresses.Contains(device.MACAddress))
+                            if (processedMacAddresses.Contains(normalizedMac))
                             {
                                 _logger.LogWarning($"[后台服务] 跳过重复MAC地址: {device.MACAddress} (设备: {device.Name}, IP: {device.IPAddress})");
                                 continue;
                             }
                             
+                            // 使用规范化比较从数据库查找设备
                             var existingDevice = await context.Set<Core.Models.Device>()
-                                .FirstOrDefaultAsync(d => d.MACAddress == device.MACAddress);
+                                .FirstOrDefaultAsync(d => d.MACAddress != null &&
+                                    d.MACAddress.Replace(":", "").Replace("-", "").Replace(" ", "").ToUpper() == normalizedMac);
                                 
                             if (existingDevice == null)
                             {
@@ -102,14 +113,16 @@ namespace ITDeviceManager.API.Services
                                     deviceWithSameIp.Status = device.Status;
                                     deviceWithSameIp.LastSeen = DateTime.UtcNow;
                                     deviceWithSameIp.UpdatedAt = DateTime.UtcNow;
-                                    processedMacAddresses.Add(device.MACAddress);
+                                    processedMacAddresses.Add(normalizedMac);
                                     continue;
                                 }
                                 
+                                // 确保新设备的 LastSeen/CreatedAt/UpdatedAt 设置
+                                device.LastSeen = DateTime.UtcNow;
                                 device.CreatedAt = DateTime.UtcNow;
                                 device.UpdatedAt = DateTime.UtcNow;
                                 context.Set<Core.Models.Device>().Add(device);
-                                processedMacAddresses.Add(device.MACAddress);
+                                processedMacAddresses.Add(normalizedMac);
                                 _logger.LogInformation($"[后台服务] 发现新设备: {device.Name} (MAC: {device.MACAddress}, IP: {device.IPAddress})");
                             }
                             else
@@ -141,14 +154,13 @@ namespace ITDeviceManager.API.Services
                                     existingDevice.Name = device.Name;
                                     hasChanges = true;
                                 }
-                                
-                                if (hasChanges)
-                                {
-                                    existingDevice.LastSeen = DateTime.UtcNow;
-                                    existingDevice.UpdatedAt = DateTime.UtcNow;
-                                }
-                                
-                                processedMacAddresses.Add(device.MACAddress);
+
+                                // 总是刷新 LastSeen / UpdatedAt，表示刚刚被发现
+                                existingDevice.LastSeen = DateTime.UtcNow;
+                                existingDevice.UpdatedAt = DateTime.UtcNow;
+
+                                // 如果有其他变化也会触发保存（已设置 above）
+                                processedMacAddresses.Add(normalizedMac);
                             }
                         }
                         catch (Exception ex)

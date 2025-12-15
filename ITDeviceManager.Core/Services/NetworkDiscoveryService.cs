@@ -417,28 +417,50 @@ namespace ITDeviceManager.Core.Services
         private async Task<List<int>> ScanCommonPortsAsync(string ipAddress)
         {
             var openPorts = new List<int>();
-            var commonPorts = new[] { 22, 23, 53, 80, 135, 139, 443, 445, 554, 631, 993, 995, 1433, 3306, 3389, 5432, 5900, 8080, 9100 };
-            
+            // Reduced port list for faster scanning - focus on most common services
+            var commonPorts = new[] { 22, 80, 443, 3389, 631, 9100 };
+
             var tasks = commonPorts.Select(async port =>
             {
+                using var client = new System.Net.Sockets.TcpClient();
                 try
                 {
-                    using var client = new System.Net.Sockets.TcpClient();
-                    var connectTask = client.ConnectAsync(ipAddress, port);
-                    var timeoutTask = Task.Delay(1000);
-                    
-                    if (await Task.WhenAny(connectTask, timeoutTask) == connectTask && client.Connected)
+                    // Reduced timeout to 500ms for faster scanning
+                    using var cts = new CancellationTokenSource(500);
+                    await client.ConnectAsync(ipAddress, port, cts.Token);
+
+                    if (client.Connected)
                     {
                         return port;
                     }
                 }
-                catch { }
+                catch (OperationCanceledException)
+                {
+                    // Timeout - port not open
+                }
+                catch (SocketException)
+                {
+                    // Connection refused - port not open
+                }
+                catch
+                {
+                    // Other exceptions - treat as closed
+                }
+                finally
+                {
+                    // Ensure client is disposed even if exceptions occur
+                    try
+                    {
+                        client.Close();
+                    }
+                    catch { }
+                }
                 return -1;
             });
-            
+
             var results = await Task.WhenAll(tasks);
             openPorts.AddRange(results.Where(p => p != -1));
-            
+
             return openPorts;
         }
     }

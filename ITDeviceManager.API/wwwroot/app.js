@@ -79,15 +79,15 @@ function displayDevices(devices) {
                         最后在线: ${formatDateTime(device.lastSeen)}
                     </p>
                     <div class="btn-group w-100" role="group">
-                        <button class="btn btn-outline-primary btn-sm" onclick="showDeviceDetails(${device.id})">
+                        <button class="btn btn-outline-primary btn-sm" onclick="showDeviceDetails(${device.id})" title="查看详情">
                             <i class="fas fa-info-circle"></i>
                         </button>
-                        <button class="btn btn-outline-success btn-sm" onclick="wakeDevice(${device.id})" 
-                                ${device.status === 1 ? 'disabled' : ''}>
-                            <i class="fas fa-power-off"></i>
+                        <button class="btn btn-outline-success btn-sm" onclick="wakeDevice(${device.id})"
+                                title="${device.status === 1 ? '设备已在线（仍可测试WOL）' : '唤醒设备'}">
+                            <i class="fas fa-power-off"></i> ${device.status === 1 ? '(已在线)' : ''}
                         </button>
                         <button class="btn btn-outline-danger btn-sm" onclick="shutdownDevice(${device.id})"
-                                ${device.status !== 1 ? 'disabled' : ''}>
+                                ${device.status !== 1 ? 'disabled' : ''} title="关闭设备">
                             <i class="fas fa-stop"></i>
                         </button>
                     </div>
@@ -143,23 +143,46 @@ async function discoverDevices() {
 // 唤醒设备
 async function wakeDevice(deviceId) {
     try {
+        console.log(`发送 Wake-on-LAN 请求到设备 ${deviceId}...`);
+
         const response = await fetch(`${API_BASE}/devices/${deviceId}/wake`, {
-            method: 'POST'
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            }
         });
-        
-        const result = await response.json();
-        
-        if (result.result === 1) {
-            showSuccess('Wake-on-LAN 指令已发送');
-        } else {
-            showError('Wake-on-LAN 指令发送失败');
+
+        console.log(`响应状态: ${response.status}`);
+
+        if (!response.ok) {
+            // 尝试解析错误信息
+            try {
+                const errorData = await response.json();
+                console.error('API错误响应:', errorData);
+                showError(errorData.error || errorData.message || `HTTP ${response.status} 错误`);
+            } catch (e) {
+                showError(`唤醒失败: HTTP ${response.status}`);
+            }
+            return;
         }
-        
+
+        const result = await response.json();
+        console.log('Wake-on-LAN 响应:', result);
+
+        // 处理新的响应格式
+        if (result.success) {
+            showSuccess(result.message || 'Wake-on-LAN 魔术包已发送！');
+            console.log('设备信息:', result.device);
+            console.log('操作记录:', result.operation);
+        } else {
+            showError(result.message || result.error || 'Wake-on-LAN 发送失败');
+        }
+
         // 延迟刷新设备状态
         setTimeout(refreshDevices, 2000);
     } catch (error) {
-        console.error('唤醒设备失败:', error);
-        showError('唤醒设备失败');
+        console.error('唤醒设备异常:', error);
+        showError(`唤醒设备失败: ${error.message}`);
     }
 }
 

@@ -10,6 +10,7 @@ namespace ITDeviceManager.API.Data
             PowerOperations = Set<PowerOperation>();
             DeviceRelations = Set<DeviceRelation>();
             devices = Set<Device>();
+            Users = Set<User>();
         }
   
 
@@ -27,6 +28,7 @@ namespace ITDeviceManager.API.Data
 
         public DbSet<DeviceRelation> DeviceRelations { get; set; }
         public DbSet<PowerOperation> PowerOperations { get; set; }
+        public DbSet<User> Users { get; set; }
         
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -66,14 +68,22 @@ namespace ITDeviceManager.API.Data
             modelBuilder.Entity<PowerOperation>(entity =>
             {
                 entity.HasKey(e => e.Id);
-                
+
                 entity.HasOne(e => e.Device)
                     .WithMany(e => e.PowerOperations)
                     .HasForeignKey(e => e.DeviceId)
                     .OnDelete(DeleteBehavior.Cascade);
-                    
+
                 entity.Property(e => e.Operation).HasConversion<int>();
                 entity.Property(e => e.Result).HasConversion<int>();
+            });
+
+            // User 配置
+            modelBuilder.Entity<User>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+                entity.HasIndex(e => e.Username).IsUnique();
+                entity.Property(e => e.Role).HasDefaultValue("User");
             });
         }
     }

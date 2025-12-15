@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
 using ITDeviceManager.API.Data;
 using ITDeviceManager.Core.Models;
@@ -7,6 +8,7 @@ namespace ITDeviceManager.API.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
+    [Authorize(Roles = $"{UserRoles.Admin},{UserRoles.Operator}")] // Only Admin and Operator can manage relations
     public class DeviceRelationsController : ControllerBase
     {
         private readonly DeviceContext _context;
@@ -17,6 +19,7 @@ namespace ITDeviceManager.API.Controllers
         }
         
         [HttpGet]
+        [AllowAnonymous] // Allow public access to view relations
         public async Task<ActionResult<IEnumerable<DeviceRelation>>> GetDeviceRelations()
         {
             return await _context.DeviceRelations
@@ -26,6 +29,7 @@ namespace ITDeviceManager.API.Controllers
         }
         
         [HttpGet("{id}")]
+        [AllowAnonymous] // Allow public access to view relation details
         public async Task<ActionResult<DeviceRelation>> GetDeviceRelation(int id)
         {
             var relation = await _context.DeviceRelations
@@ -117,6 +121,7 @@ namespace ITDeviceManager.API.Controllers
         }
         
         [HttpGet("device/{deviceId}/children")]
+        [AllowAnonymous] // Allow public access to view device children
         public async Task<ActionResult<IEnumerable<Device>>> GetChildDevices(int deviceId)
         {
             var childDevices = await _context.DeviceRelations
@@ -129,6 +134,7 @@ namespace ITDeviceManager.API.Controllers
         }
         
         [HttpGet("device/{deviceId}/parents")]
+        [AllowAnonymous] // Allow public access to view device parents
         public async Task<ActionResult<IEnumerable<Device>>> GetParentDevices(int deviceId)
         {
             var parentDevices = await _context.DeviceRelations

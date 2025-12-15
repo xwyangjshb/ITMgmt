@@ -1,4 +1,7 @@
+using System.Net.NetworkInformation;
+using System.Threading;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
 using ITDeviceManager.API.Data;
 using ITDeviceManager.Core.Models;
@@ -8,420 +11,696 @@ namespace ITDeviceManager.API.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
+    [Authorize] // Require authentication for all endpoints by default
     public class DevicesController : ControllerBase
     {
         private readonly DeviceContext _context;
         private readonly INetworkDiscoveryService _discoveryService;
         private readonly IWakeOnLanService _wakeOnLanService;
 
-        public DevicesController(
-            DeviceContext context, 
-            INetworkDiscoveryService discoveryService,
-            IWakeOnLanService wakeOnLanService)
+        public DevicesController(DeviceContext context, INetworkDiscoveryService discoveryService, IWakeOnLanService wakeOnLanService)
         {
             _context = context;
             _discoveryService = discoveryService;
             _wakeOnLanService = wakeOnLanService;
         }
-        
+
         [HttpGet]
-        public async Task<ActionResult<IEnumerable<Device>>> GetDevices()
+        [AllowAnonymous] // Allow public access to view devices
+        public async Task<IActionResult> GetDevices()
         {
-            try
+            // prevent client caching
+            Response.Headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0";
+            Response.Headers["Pragma"] = "no-cache";
+            Response.Headers["Expires"] = "0";
+
+            // load entities so we can update LastSeen/status if reachable
+            var devices = await _context.Set<Device>().ToListAsync();
+
+            var semaphore = new SemaphoreSlim(20); // limit concurrent pings
+            var tasks = new List<Task>();
+            var changed = false;
+
+            foreach (var dev in devices)
             {
-                var devices = await _context.Set<Device>()
-                    .Select(d => new Device
+                var device = dev; // capture
+                await semaphore.WaitAsync();
+                tasks.Add(Task.Run(async () =>
+                {
+                    try
                     {
-                        Id = d.Id,
-                        Name = d.Name,
-                        IPAddress = d.IPAddress,
-                        MACAddress = d.MACAddress,
-                        DeviceType = d.DeviceType,
-                        OperatingSystem = d.OperatingSystem,
-                        Manufacturer = d.Manufacturer,
-                        Model = d.Model,
-                        Status = d.Status,
-                        LastSeen = d.LastSeen,
-                        CreatedAt = d.CreatedAt,
-                        UpdatedAt = d.UpdatedAt,
-                        WakeOnLanEnabled = d.WakeOnLanEnabled,
-                        Description = d.Description,
-                        // 不包含导航属性，避免循环引用
-                        PowerOperations = new List<PowerOperation>(),
-                        ParentRelations = new List<DeviceRelation>(),
-                        ChildRelations = new List<DeviceRelation>()
-                    })
-                    .ToListAsync();
-                
-                return Ok(devices);
-            }
-            catch (Exception ex)
-            {
-                // 记录错误日志
-                Console.WriteLine($"获取设备列表时发生错误: {ex.Message}");
-                Console.WriteLine($"堆栈跟踪: {ex.StackTrace}");
-                
-                // 返回空列表而不是错误，避免前端解析问题
-                return Ok(new List<Device>());
-            }
-        }
-        
-        [HttpGet("{id}")]
-        public async Task<ActionResult<Device>> GetDevice(int id)
-        {
-            try
-            {
-                var device = await _context.Set<Device>()
-                    .Select(d => new Device
+                        if (!string.IsNullOrWhiteSpace(device.IPAddress))
+                        {
+                            try
+                            {
+                                using var p = new Ping();
+                                var reply = await p.SendPingAsync(device.IPAddress, 400);
+                                if (reply.Status == IPStatus.Success)
+                                {
+                                    device.LastSeen = DateTime.UtcNow;
+                                    device.Status = DeviceStatus.Online;
+                                    device.UpdatedAt = DateTime.UtcNow;
+                                    changed = true;
+                                }
+                            }
+                            catch
+                            {
+                                // ignore ping errors
+                            }
+                        }
+                    }
+                    finally
                     {
-                        Id = d.Id,
-                        Name = d.Name,
-                        IPAddress = d.IPAddress,
-                        MACAddress = d.MACAddress,
-                        DeviceType = d.DeviceType,
-                        OperatingSystem = d.OperatingSystem,
-                        Manufacturer = d.Manufacturer,
-                        Model = d.Model,
-                        Status = d.Status,
-                        LastSeen = d.LastSeen,
-                        CreatedAt = d.CreatedAt,
-                        UpdatedAt = d.UpdatedAt,
-                        WakeOnLanEnabled = d.WakeOnLanEnabled,
-                        Description = d.Description,
-                        // 不包含导航属性，避免循环引用
-                        PowerOperations = new List<PowerOperation>(),
-                        ParentRelations = new List<DeviceRelation>(),
-                        ChildRelations = new List<DeviceRelation>()
-                    })
-                    .FirstOrDefaultAsync(d => d.Id == id);
-                    
-                if (device == null)
-                {
-                    return NotFound();
-                }
-                
-                return Ok(device);
+                        semaphore.Release();
+                    }
+                }));
             }
-            catch (Exception ex)
+
+            await Task.WhenAll(tasks);
+
+            if (changed)
             {
-                // 记录错误日志
-                Console.WriteLine($"获取设备详情时发生错误: {ex.Message}");
-                Console.WriteLine($"堆栈跟踪: {ex.StackTrace}");
-                
-                return StatusCode(500, new { error = "获取设备详情失败", message = ex.Message });
-            }
-        }
-        
-        [HttpPost]
-        public async Task<ActionResult<Device>> CreateDevice(Device device)
-        {
-            try
-            {
-                // 检查MAC地址是否已存在
-                var existingDeviceByMac = await _context.Set<Device>()
-                    .FirstOrDefaultAsync(d => d.MACAddress == device.MACAddress);
-                
-                if (existingDeviceByMac != null)
-                {
-                    return Conflict(new { 
-                        error = "MAC地址已存在", 
-                        message = $"MAC地址 {device.MACAddress} 已被设备 {existingDeviceByMac.Name} (ID: {existingDeviceByMac.Id}) 使用",
-                        existingDevice = new {
-                            id = existingDeviceByMac.Id,
-                            name = existingDeviceByMac.Name,
-                            ipAddress = existingDeviceByMac.IPAddress,
-                            macAddress = existingDeviceByMac.MACAddress
-                        }
-                    });
-                }
-                
-                // 检查IP地址是否已存在
-                var existingDeviceByIp = await _context.Set<Device>()
-                    .FirstOrDefaultAsync(d => d.IPAddress == device.IPAddress);
-                
-                if (existingDeviceByIp != null)
-                {
-                    return Conflict(new { 
-                        error = "IP地址已存在", 
-                        message = $"IP地址 {device.IPAddress} 已被设备 {existingDeviceByIp.Name} (ID: {existingDeviceByIp.Id}) 使用",
-                        existingDevice = new {
-                            id = existingDeviceByIp.Id,
-                            name = existingDeviceByIp.Name,
-                            ipAddress = existingDeviceByIp.IPAddress,
-                            macAddress = existingDeviceByIp.MACAddress
-                        }
-                    });
-                }
-                
-                device.CreatedAt = DateTime.UtcNow;
-                device.UpdatedAt = DateTime.UtcNow;
-                
-                _context.Set<Device>().Add(device);
                 await _context.SaveChangesAsync();
-                
-                Console.WriteLine($"成功创建设备: {device.Name} (MAC: {device.MACAddress}, IP: {device.IPAddress})");
-                return CreatedAtAction(nameof(GetDevice), new { id = device.Id }, device);
             }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"创建设备时发生错误: {ex.Message}");
-                return StatusCode(500, new { error = "创建设备失败", message = ex.Message });
-            }
+
+            var projection = devices.Select(d => new {
+                d.Id,
+                d.Name,
+                d.IPAddress,
+                d.MACAddress,
+                d.DeviceType,
+                d.Status,
+                d.LastSeen,
+                d.CreatedAt,
+                d.UpdatedAt,
+                d.WakeOnLanEnabled,
+                d.Description
+            }).ToList();
+
+            return Ok(projection);
         }
-        
-        [HttpPatch("{id}/wake-on-lan")]
-        public async Task<IActionResult> UpdateWakeOnLanSetting(int id, [FromBody] bool enabled)
+
+        [HttpPost("refresh")]
+        [Authorize(Roles = $"{UserRoles.Admin},{UserRoles.Operator}")]
+        public async Task<IActionResult> RefreshDevices([FromBody] RefreshRequest? request)
+        {
+            // If networkRange specified, run discovery for that range and update DB
+            if (!string.IsNullOrWhiteSpace(request?.NetworkRange))
+            {
+                var discovered = await _discoveryService.DiscoverDevicesAsync(request!.NetworkRange);
+                int added = 0, updated = 0;
+
+                foreach (var d in discovered)
+                {
+                    // normalize MAC for comparison
+                    var normMac = (d.MACAddress ?? string.Empty).Replace(":", "").Replace("-", "").Replace(" ", "").ToUpperInvariant();
+                    var existing = await _context.Set<Device>()
+                        .FirstOrDefaultAsync(x => (x.MACAddress ?? string.Empty).Replace(":", "").Replace("-", "").Replace(" ", "").ToUpper() == normMac);
+
+                    if (existing == null)
+                    {
+                        d.CreatedAt = DateTime.UtcNow;
+                        d.UpdatedAt = DateTime.UtcNow;
+                        d.LastSeen = DateTime.UtcNow;
+                        _context.Set<Device>().Add(d);
+                        added++;
+                    }
+                    else
+                    {
+                        bool changed = false;
+                        if (existing.IPAddress != d.IPAddress)
+                        {
+                            existing.IPAddress = d.IPAddress;
+                            changed = true;
+                        }
+                        if (existing.DeviceType != d.DeviceType && d.DeviceType != DeviceType.Unknown)
+                        {
+                            existing.DeviceType = d.DeviceType;
+                            changed = true;
+                        }
+                        // always update LastSeen/Status
+                        existing.LastSeen = DateTime.UtcNow;
+                        existing.Status = d.Status;
+                        existing.UpdatedAt = DateTime.UtcNow;
+                        if (changed) updated++;
+                    }
+                }
+
+                await _context.SaveChangesAsync();
+                return Ok(new { action = "discovery", networkRange = request.NetworkRange, added, updated, total = discovered.Count });
+            }
+
+            // Otherwise ping existing devices and update LastSeen/status
+            var devices = await _context.Set<Device>().ToListAsync();
+            var sem = new SemaphoreSlim(20);
+            var tasks = new List<Task>();
+            int onlineCount = 0;
+
+            foreach (var dev in devices)
+            {
+                var device = dev;
+                await sem.WaitAsync();
+                tasks.Add(Task.Run(async () =>
+                {
+                    try
+                    {
+                        bool reachable = false;
+                        try
+                        {
+                            // prefer discovery service ping if available
+                            if (_discoveryService != null)
+                            {
+                                try
+                                {
+                                    reachable = await _discoveryService.PingDeviceAsync(device.IPAddress);
+                                }
+                                catch
+                                {
+                                    // fallback to System Ping
+                                    using var p = new Ping();
+                                    var reply = await p.SendPingAsync(device.IPAddress, 400);
+                                    reachable = reply.Status == IPStatus.Success;
+                                }
+                            }
+                            else
+                            {
+                                using var p = new Ping();
+                                var reply = await p.SendPingAsync(device.IPAddress, 400);
+                                reachable = reply.Status == IPStatus.Success;
+                            }
+                        }
+                        catch
+                        {
+                            reachable = false;
+                        }
+
+                        if (reachable)
+                        {
+                            device.LastSeen = DateTime.UtcNow;
+                            device.Status = DeviceStatus.Online;
+                            device.UpdatedAt = DateTime.UtcNow;
+                            Interlocked.Increment(ref onlineCount);
+                        }
+                        else
+                        {
+                            // don't mark offline here; background job handles offline detection
+                        }
+                    }
+                    finally
+                    {
+                        sem.Release();
+                    }
+                }));
+            }
+
+            await Task.WhenAll(tasks);
+            await _context.SaveChangesAsync();
+
+            return Ok(new { action = "ping", checkedCount = devices.Count, online = onlineCount });
+        }
+
+        [HttpGet("{id}")]
+        [AllowAnonymous] // Allow public access to view device details
+        public async Task<IActionResult> GetDevice(int id)
+        {
+            var device = await _context.Set<Device>().FindAsync(id);
+            if (device == null) return NotFound();
+
+            return Ok(new {
+                device.Id,
+                device.Name,
+                device.IPAddress,
+                device.MACAddress,
+                device.DeviceType,
+                device.Status,
+                device.LastSeen,
+                device.CreatedAt,
+                device.UpdatedAt,
+                device.WakeOnLanEnabled,
+                device.Description
+            });
+        }
+
+        [HttpPost("discover")]
+        [AllowAnonymous] // Allow discovery without authentication for convenience
+        public async Task<IActionResult> DiscoverDevices([FromBody] DiscoveryRequest request)
+        {
+            var discovered = await _discoveryService.DiscoverDevicesAsync(request.NetworkRange);
+            return Ok(discovered);
+        }
+
+        /// <summary>
+        /// Wake up device using Wake-on-LAN
+        /// </summary>
+        [HttpPost("{id}/wake")]
+        [AllowAnonymous] // Allow wake without authentication for convenience (consider security implications)
+        public async Task<IActionResult> WakeDevice(int id)
         {
             try
             {
                 var device = await _context.Set<Device>().FindAsync(id);
                 if (device == null)
                 {
-                    return NotFound();
+                    return NotFound(new { error = "Device not found" });
                 }
-                
-                device.WakeOnLanEnabled = enabled;
-                device.UpdatedAt = DateTime.UtcNow;
-                
+
+                // Check if WOL is enabled for this device
+                if (false  & !device.WakeOnLanEnabled)
+                {
+                    return BadRequest(new { error = "Wake-on-LAN is not enabled for this device" });
+                }
+
+                // Create power operation record
+                var operation = await _wakeOnLanService.CreateWakeOperationAsync(id, "WebUI");
+                _context.PowerOperations.Add(operation);
                 await _context.SaveChangesAsync();
-                
-                Console.WriteLine($"设备 {id} Wake-on-LAN 设置已更新为: {enabled}");
-                return Ok(new { id = device.Id, wakeOnLanEnabled = device.WakeOnLanEnabled });
+
+                // Send WOL packet
+                var success = await _wakeOnLanService.WakeDeviceAsync(device);
+
+                // Update operation result
+                operation.Result = success ? PowerOperationResult.Success : PowerOperationResult.Failed;
+                operation.CompletedAt = DateTime.UtcNow;
+                operation.ResultMessage = success
+                    ? $"Wake-on-LAN packet sent successfully to {device.MACAddress}"
+                    : "Failed to send Wake-on-LAN packet";
+
+                await _context.SaveChangesAsync();
+
+                if (success)
+                {
+                    return Ok(new
+                    {
+                        success = true,
+                        message = $"Wake-on-LAN packet sent to {device.Name}",
+                        device = new
+                        {
+                            device.Id,
+                            device.Name,
+                            device.IPAddress,
+                            device.MACAddress
+                        },
+                        operation = new
+                        {
+                            operation.Id,
+                            operation.Operation,
+                            operation.Result,
+                            operation.ResultMessage,
+                            operation.RequestedAt,
+                            operation.CompletedAt
+                        }
+                    });
+                }
+                else
+                {
+                    return StatusCode(500, new
+                    {
+                        success = false,
+                        error = "Failed to send Wake-on-LAN packet",
+                        message = operation.ResultMessage
+                    });
+                }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"更新设备 {id} Wake-on-LAN 设置时发生错误: {ex.Message}");
-                return StatusCode(500, new { error = "更新Wake-on-LAN设置失败", message = ex.Message });
+                return StatusCode(500, new
+                {
+                    success = false,
+                    error = "Exception occurred while waking device",
+                    message = ex.Message
+                });
             }
         }
 
-        [HttpPut("{id}")]
-        public async Task<IActionResult> UpdateDevice(int id, Device device)
+        /// <summary>
+        /// Wake up device by name using Wake-on-LAN
+        /// </summary>
+        [HttpPost("name/{name}/wake")]
+        [AllowAnonymous]
+        public async Task<IActionResult> WakeDeviceByName(string name)
         {
             try
             {
-                if (id != device.Id)
+                // 查找设备（不区分大小写）
+                var device = await _context.Set<Device>()
+                    .FirstOrDefaultAsync(d => d.Name.ToLower() == name.ToLower());
+
+                if (device == null)
                 {
-                    return BadRequest("ID mismatch");
+                    return NotFound(new
+                    {
+                        error = "Device not found",
+                        message = $"No device found with name '{name}'"
+                    });
                 }
-                
-                var existingDevice = await _context.Set<Device>().FindAsync(id);
-                if (existingDevice == null)
+
+                // Check if WOL is enabled for this device (currently disabled in code)
+                if (false & !device.WakeOnLanEnabled)
                 {
-                    return NotFound();
+                    return BadRequest(new { error = "Wake-on-LAN is not enabled for this device" });
                 }
-                
-                // 更新设备属性
-                existingDevice.Name = device.Name;
-                existingDevice.IPAddress = device.IPAddress;
-                existingDevice.MACAddress = device.MACAddress;
-                existingDevice.DeviceType = device.DeviceType;
-                existingDevice.OperatingSystem = device.OperatingSystem;
-                existingDevice.Manufacturer = device.Manufacturer;
-                existingDevice.Model = device.Model;
-                existingDevice.Status = device.Status;
-                existingDevice.WakeOnLanEnabled = device.WakeOnLanEnabled;
-                existingDevice.Description = device.Description;
-                existingDevice.UpdatedAt = DateTime.UtcNow;
-                
+
+                // Create power operation record
+                var operation = await _wakeOnLanService.CreateWakeOperationAsync(device.Id, "WebUI");
+                _context.PowerOperations.Add(operation);
                 await _context.SaveChangesAsync();
-                
-                Console.WriteLine($"设备 {id} 更新成功，Wake-on-LAN: {device.WakeOnLanEnabled}");
-                return NoContent();
+
+                // Send WOL packet
+                var success = await _wakeOnLanService.WakeDeviceAsync(device);
+
+                // Update operation result
+                operation.Result = success ? PowerOperationResult.Success : PowerOperationResult.Failed;
+                operation.CompletedAt = DateTime.UtcNow;
+                operation.ResultMessage = success
+                    ? $"Wake-on-LAN packet sent successfully to {device.MACAddress}"
+                    : "Failed to send Wake-on-LAN packet";
+
+                await _context.SaveChangesAsync();
+
+                if (success)
+                {
+                    return Ok(new
+                    {
+                        success = true,
+                        message = $"Wake-on-LAN packet sent to {device.Name}",
+                        device = new
+                        {
+                            device.Id,
+                            device.Name,
+                            device.IPAddress,
+                            device.MACAddress
+                        },
+                        operation = new
+                        {
+                            operation.Id,
+                            operation.Operation,
+                            operation.Result,
+                            operation.ResultMessage,
+                            operation.RequestedAt,
+                            operation.CompletedAt
+                        }
+                    });
+                }
+                else
+                {
+                    return StatusCode(500, new
+                    {
+                        success = false,
+                        error = "Failed to send Wake-on-LAN packet",
+                        message = operation.ResultMessage
+                    });
+                }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"更新设备 {id} 时发生错误: {ex.Message}");
-                Console.WriteLine($"堆栈跟踪: {ex.StackTrace}");
-                return StatusCode(500, new { error = "更新设备失败", message = ex.Message });
-            }
-        }
-        
-        [HttpDelete("{id}")]
-        public async Task<IActionResult> DeleteDevice(int id)
-        {
-            var device = await _context.Set<Device>().FindAsync(id);
-            if (device == null)
-            {
-                return NotFound();
-            }
-            
-            _context.Set<Device>().Remove(device);
-            await _context.SaveChangesAsync();
-            
-            return NoContent();
-        }
-        
-        [HttpPost("discover")]
-        public async Task<ActionResult<IEnumerable<Device>>> DiscoverDevices([FromBody] DiscoveryRequest request)
-        {
-            try
-            {
-                var discoveredDevices = await _discoveryService.DiscoverDevicesAsync(request.NetworkRange);
-                var newDevices = new List<Device>();
-                var updatedDevices = new List<Device>();
-                
-                foreach (var device in discoveredDevices)
+                return StatusCode(500, new
                 {
-                    var existingDevice = await _context.Set<Device>()
-                        .FirstOrDefaultAsync(d => d.MACAddress == device.MACAddress);
-                        
-                    if (existingDevice == null)
-                    {
-                        // 再次检查IP地址是否被其他设备使用
-                        var deviceWithSameIp = await _context.Set<Device>()
-                            .FirstOrDefaultAsync(d => d.IPAddress == device.IPAddress);
-                            
-                        if (deviceWithSameIp != null)
-                        {
-                            Console.WriteLine($"[警告] 发现IP冲突: 新设备 {device.Name} (MAC: {device.MACAddress}) 与现有设备 {deviceWithSameIp.Name} (MAC: {deviceWithSameIp.MACAddress}) 使用相同IP {device.IPAddress}");
-                            // 更新现有设备的MAC地址（可能是设备更换了网卡）
-                            deviceWithSameIp.MACAddress = device.MACAddress;
-                            deviceWithSameIp.Name = device.Name;
-                            deviceWithSameIp.DeviceType = device.DeviceType;
-                            deviceWithSameIp.Status = device.Status;
-                            deviceWithSameIp.LastSeen = DateTime.UtcNow;
-                            deviceWithSameIp.UpdatedAt = DateTime.UtcNow;
-                            updatedDevices.Add(deviceWithSameIp);
-                            continue;
-                        }
-                        
-                        device.CreatedAt = DateTime.UtcNow;
-                        device.UpdatedAt = DateTime.UtcNow;
-                        _context.Set<Device>().Add(device); 
-                        newDevices.Add(device);
-                        Console.WriteLine($"发现新设备: {device.Name} (MAC: {device.MACAddress}, IP: {device.IPAddress})");
-                    }
-                    else
-                    {
-                        // 更新现有设备信息
-                        bool hasChanges = false;
-                        
-                        if (existingDevice.IPAddress != device.IPAddress)
-                        {
-                            Console.WriteLine($"设备 {existingDevice.Name} IP地址变更: {existingDevice.IPAddress} -> {device.IPAddress}");
-                            existingDevice.IPAddress = device.IPAddress;
-                            hasChanges = true;
-                        }
-                        
-                        if (existingDevice.Status != device.Status)
-                        {
-                            existingDevice.Status = device.Status;
-                            hasChanges = true;
-                        }
-                        
-                        if (existingDevice.DeviceType != device.DeviceType && device.DeviceType != DeviceType.Unknown)
-                        {
-                            existingDevice.DeviceType = device.DeviceType;
-                            hasChanges = true;
-                        }
-                        
-                        if (hasChanges)
-                        {
-                            existingDevice.LastSeen = DateTime.UtcNow;
-                            existingDevice.UpdatedAt = DateTime.UtcNow;
-                            updatedDevices.Add(existingDevice);
-                        }
-                    }
-                }
-                
-                await _context.SaveChangesAsync();
-                
-                Console.WriteLine($"设备发现完成: 新增 {newDevices.Count} 个设备，更新 {updatedDevices.Count} 个设备");
-                return Ok(new { 
-                    newDevices = newDevices,
-                    updatedDevices = updatedDevices.Count,
-                    message = $"发现完成: 新增 {newDevices.Count} 个设备，更新 {updatedDevices.Count} 个设备"
+                    success = false,
+                    error = "Exception occurred while waking device",
+                    message = ex.Message
                 });
             }
+        }
+
+        /// <summary>
+        /// Wake up device by MAC address using Wake-on-LAN
+        /// Supports multiple MAC address formats: AA:BB:CC:DD:EE:FF, AA-BB-CC-DD-EE-FF, AABBCCDDEEFF (case-insensitive)
+        /// </summary>
+        [HttpPost("mac/{macAddress}/wake")]
+        [AllowAnonymous]
+        public async Task<IActionResult> WakeDeviceByMac(string macAddress)
+        {
+            try
+            {
+                // 规范化 MAC 地址（移除分隔符，转大写）
+                var normalizedMac = NormalizeMacAddress(macAddress);
+
+                if (string.IsNullOrEmpty(normalizedMac))
+                {
+                    return BadRequest(new
+                    {
+                        error = "Invalid MAC address format",
+                        message = $"MAC address '{macAddress}' is invalid. Expected format: AA:BB:CC:DD:EE:FF, AA-BB-CC-DD-EE-FF, or AABBCCDDEEFF"
+                    });
+                }
+
+                // 查找设备（通过规范化的 MAC 地址匹配）
+                // 注意：由于 NormalizeMacAddress 无法转换为 SQL，需要先加载数据到内存
+                var devices = await _context.Set<Device>().ToListAsync();
+                var device = devices.FirstOrDefault(d => NormalizeMacAddress(d.MACAddress ?? string.Empty) == normalizedMac);
+
+                if (device == null)
+                {
+                    return NotFound(new
+                    {
+                        error = "Device not found",
+                        message = $"No device found with MAC address '{macAddress}' (normalized: {FormatMacAddress(normalizedMac)})"
+                    });
+                }
+
+                // Check if WOL is enabled for this device (currently disabled in code)
+                if (false & !device.WakeOnLanEnabled)
+                {
+                    return BadRequest(new { error = "Wake-on-LAN is not enabled for this device" });
+                }
+
+                // Create power operation record
+                var operation = await _wakeOnLanService.CreateWakeOperationAsync(device.Id, "WebUI");
+                _context.PowerOperations.Add(operation);
+                await _context.SaveChangesAsync();
+
+                // Send WOL packet
+                var success = await _wakeOnLanService.WakeDeviceAsync(device);
+
+                // Update operation result
+                operation.Result = success ? PowerOperationResult.Success : PowerOperationResult.Failed;
+                operation.CompletedAt = DateTime.UtcNow;
+                operation.ResultMessage = success
+                    ? $"Wake-on-LAN packet sent successfully to {device.MACAddress}"
+                    : "Failed to send Wake-on-LAN packet";
+
+                await _context.SaveChangesAsync();
+
+                if (success)
+                {
+                    return Ok(new
+                    {
+                        success = true,
+                        message = $"Wake-on-LAN packet sent to {device.Name}",
+                        device = new
+                        {
+                            device.Id,
+                            device.Name,
+                            device.IPAddress,
+                            device.MACAddress
+                        },
+                        operation = new
+                        {
+                            operation.Id,
+                            operation.Operation,
+                            operation.Result,
+                            operation.ResultMessage,
+                            operation.RequestedAt,
+                            operation.CompletedAt
+                        }
+                    });
+                }
+                else
+                {
+                    return StatusCode(500, new
+                    {
+                        success = false,
+                        error = "Failed to send Wake-on-LAN packet",
+                        message = operation.ResultMessage
+                    });
+                }
+            }
             catch (Exception ex)
             {
-                Console.WriteLine($"设备发现过程中发生错误: {ex.Message}");
-                Console.WriteLine($"堆栈跟踪: {ex.StackTrace}");
-                return StatusCode(500, new { error = "设备发现失败", message = ex.Message });
+                return StatusCode(500, new
+                {
+                    success = false,
+                    error = "Exception occurred while waking device",
+                    message = ex.Message
+                });
             }
         }
+
         /// <summary>
-        /// 发送WOL包唤醒设备
+        /// Normalize MAC address to a consistent format (remove separators, uppercase, validate)
+        /// Supports formats: AA:BB:CC:DD:EE:FF, AA-BB-CC-DD-EE-FF, AABBCCDDEEFF
         /// </summary>
-        /// <param name="id"></param>
-        /// <returns></returns>
-        [HttpPost("{id}/wake")]
-        public async Task<ActionResult<PowerOperation>> WakeDevice(int id)
+        private string NormalizeMacAddress(string macAddress)
         {
-            var device = await _context.Set<Device>().FindAsync(id);
-            if (device == null)
-            {
-                return NotFound();
-            }
-            
-            // 检查WOL是否已启用
-            if (!device.WakeOnLanEnabled)
-            {
-                return BadRequest(new { error = "Wake-on-LAN is not enabled for this device" });
-            }
-            
-            var operation = await _wakeOnLanService.CreateWakeOperationAsync(id, "API");
-            _context.PowerOperations.Add(operation);
-            await _context.SaveChangesAsync();
-            
-            var success = await _wakeOnLanService.WakeDeviceAsync(device);
-            
-            operation.Result = success ? PowerOperationResult.Success : PowerOperationResult.Failed;
-            operation.CompletedAt = DateTime.UtcNow;
-            operation.ResultMessage = success ? "Wake-on-LAN packet sent successfully" : "Failed to send Wake-on-LAN packet";
-            
-            await _context.SaveChangesAsync();
-            
-            return Ok(operation);
+            if (string.IsNullOrWhiteSpace(macAddress))
+                return string.Empty;
+
+            // Remove all separators (: - and spaces)
+            var normalized = macAddress.Replace(":", "").Replace("-", "").Replace(" ", "").ToUpperInvariant();
+
+            // Validate: must be exactly 12 hexadecimal characters
+            if (normalized.Length != 12)
+                return string.Empty;
+
+            // Validate: all characters must be valid hex (0-9, A-F)
+            if (!System.Text.RegularExpressions.Regex.IsMatch(normalized, "^[0-9A-F]{12}$"))
+                return string.Empty;
+
+            return normalized;
         }
-        
+
+        /// <summary>
+        /// Format normalized MAC address to standard colon-separated format
+        /// </summary>
+        private string FormatMacAddress(string normalizedMac)
+        {
+            if (string.IsNullOrEmpty(normalizedMac) || normalizedMac.Length != 12)
+                return normalizedMac;
+
+            return string.Join(":", Enumerable.Range(0, 6).Select(i => normalizedMac.Substring(i * 2, 2)));
+        }
+
+        /// <summary>
+        /// Shutdown device remotely (placeholder - requires additional implementation)
+        /// </summary>
         [HttpPost("{id}/shutdown")]
-        public async Task<ActionResult<PowerOperation>> ShutdownDevice(int id)
+        [Authorize(Roles = $"{UserRoles.Admin},{UserRoles.Operator}")]
+        public async Task<IActionResult> ShutdownDevice(int id)
         {
-            var device = await _context.Set<Device>().FindAsync(id);
-            if (device == null)
+            try
             {
-                return NotFound();
+                var device = await _context.Set<Device>().FindAsync(id);
+                if (device == null)
+                {
+                    return NotFound(new { error = "Device not found" });
+                }
+
+                var operation = new PowerOperation
+                {
+                    DeviceId = id,
+                    Operation = PowerOperationType.Shutdown,
+                    Result = PowerOperationResult.Pending,
+                    RequestedBy = "WebUI",
+                    RequestedAt = DateTime.UtcNow
+                };
+
+                _context.PowerOperations.Add(operation);
+                await _context.SaveChangesAsync();
+
+                var success = await _wakeOnLanService.ShutdownDeviceAsync(device.IPAddress);
+
+                operation.Result = success ? PowerOperationResult.Success : PowerOperationResult.Failed;
+                operation.CompletedAt = DateTime.UtcNow;
+                operation.ResultMessage = success
+                    ? "Shutdown command sent successfully"
+                    : "Failed to send shutdown command (not implemented)";
+
+                await _context.SaveChangesAsync();
+
+                if (success)
+                {
+                    return Ok(new { success = true, message = "Shutdown command sent", operation });
+                }
+                else
+                {
+                    return StatusCode(501, new
+                    {
+                        success = false,
+                        error = "Shutdown not implemented",
+                        message = "Remote shutdown requires SSH/WMI/IPMI configuration"
+                    });
+                }
             }
-            
-            var operation = new PowerOperation
+            catch (Exception ex)
             {
-                DeviceId = id,
-                Operation = PowerOperationType.Shutdown,
-                Result = PowerOperationResult.Pending,
-                RequestedBy = "API",
-                RequestedAt = DateTime.UtcNow
-            };
-            
-            _context.PowerOperations.Add(operation);
-            await _context.SaveChangesAsync();
-            
-            var success = await _wakeOnLanService.ShutdownDeviceAsync(device.IPAddress);
-            
-            operation.Result = success ? PowerOperationResult.Success : PowerOperationResult.Failed;
-            operation.CompletedAt = DateTime.UtcNow;
-            operation.ResultMessage = success ? "Shutdown command sent successfully" : "Failed to send shutdown command";
-            
-            await _context.SaveChangesAsync();
-            
-            return Ok(operation);
+                return StatusCode(500, new
+                {
+                    success = false,
+                    error = "Exception occurred while shutting down device",
+                    message = ex.Message
+                });
+            }
         }
-        
-        private bool DeviceExists(int id)
+
+        /// <summary>
+        /// Update device details
+        /// </summary>
+        [HttpPut("{id}")]
+        [Authorize(Roles = $"{UserRoles.Admin},{UserRoles.Operator}")]
+        public async Task<IActionResult> UpdateDevice(int id, [FromBody] DeviceUpdateRequest request)
         {
-            return _context.Set<Device>().Any(e => e.Id == id);
+            try
+            {
+                var device = await _context.Set<Device>().FindAsync(id);
+                if (device == null)
+                {
+                    return NotFound(new { error = "Device not found" });
+                }
+
+                // Update fields if provided
+                if (!string.IsNullOrEmpty(request.Name))
+                    device.Name = request.Name;
+
+                if (request.WakeOnLanEnabled.HasValue)
+                    device.WakeOnLanEnabled = request.WakeOnLanEnabled.Value;
+
+                if (!string.IsNullOrEmpty(request.Description))
+                    device.Description = request.Description;
+
+                device.UpdatedAt = DateTime.UtcNow;
+                await _context.SaveChangesAsync();
+
+                return Ok(new { success = true, message = "Device updated successfully", device });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new
+                {
+                    success = false,
+                    error = "Failed to update device",
+                    message = ex.Message
+                });
+            }
         }
-    }
-    
-    public class DiscoveryRequest
-    {
-        public string NetworkRange { get; set; } = string.Empty;
-    }
-    
-    public class ShutdownRequest
-    {
-        public string? Username { get; set; }
-        public string? Password { get; set; }
+
+        /// <summary>
+        /// Delete device
+        /// </summary>
+        [HttpDelete("{id}")]
+        [Authorize(Roles = UserRoles.Admin)]
+        public async Task<IActionResult> DeleteDevice(int id)
+        {
+            try
+            {
+                var device = await _context.Set<Device>().FindAsync(id);
+                if (device == null)
+                {
+                    return NotFound(new { error = "Device not found" });
+                }
+
+                _context.Set<Device>().Remove(device);
+                await _context.SaveChangesAsync();
+
+                return Ok(new { success = true, message = $"Device {device.Name} deleted successfully" });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new
+                {
+                    success = false,
+                    error = "Failed to delete device",
+                    message = ex.Message
+                });
+            }
+        }
+
+        public class DiscoveryRequest { public string NetworkRange { get; set; } = string.Empty; }
+        public class RefreshRequest { public string? NetworkRange { get; set; } }
+        public class DeviceUpdateRequest
+        {
+            public string? Name { get; set; }
+            public bool? WakeOnLanEnabled { get; set; }
+            public string? Description { get; set; }
+        }
     }
 }

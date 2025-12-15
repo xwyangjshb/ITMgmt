@@ -1,21 +1,75 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.OpenApi.Models;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+using System.Text;
 using ITDeviceManager.API.Data;
+using ITDeviceManager.API.Services;
 using ITDeviceManager.Core.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
+var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
+if (string.IsNullOrEmpty(connectionString))
+{
+    throw new InvalidOperationException("Connection string 'DefaultConnection' not found in configuration.");
+}
+
 builder.Services.AddDbContext<DeviceContext>(options =>
-    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection") ?? 
-        "Server=(localdb)\\mssqllocaldb;Database=ITDeviceManagerDB;Trusted_Connection=true;MultipleActiveResultSets=true"));
+    options.UseSqlServer(connectionString));
 
 // Register services
 builder.Services.AddScoped<INetworkDiscoveryService, NetworkDiscoveryService>();
 builder.Services.AddScoped<IWakeOnLanService, WakeOnLanService>();
+builder.Services.AddScoped<IAuthService, AuthService>();
 
 // 注册后台服务
 builder.Services.AddHostedService<ITDeviceManager.API.Services.DeviceDiscoveryBackgroundService>();
+
+// Configure JWT Authentication
+var jwtSecretKey = builder.Configuration["Jwt:SecretKey"];
+if (string.IsNullOrEmpty(jwtSecretKey))
+{
+    throw new InvalidOperationException("JWT SecretKey is not configured in appsettings.json");
+}
+
+builder.Services.AddAuthentication(options =>
+{
+    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+})
+.AddJwtBearer(options =>
+{
+    options.TokenValidationParameters = new TokenValidationParameters
+    {
+        ValidateIssuer = true,
+        ValidateAudience = true,
+        ValidateLifetime = true,
+        ValidateIssuerSigningKey = true,
+        ValidIssuer = builder.Configuration["Jwt:Issuer"],
+        ValidAudience = builder.Configuration["Jwt:Audience"],
+        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSecretKey)),
+        ClockSkew = TimeSpan.Zero // Remove default 5 minute clock skew
+    };
+
+    options.Events = new JwtBearerEvents
+    {
+        OnAuthenticationFailed = context =>
+        {
+            var logger = context.HttpContext.RequestServices.GetRequiredService<ILogger<Program>>();
+            logger.LogWarning("Authentication failed: {Exception}", context.Exception.Message);
+            return Task.CompletedTask;
+        },
+        OnTokenValidated = context =>
+        {
+            var logger = context.HttpContext.RequestServices.GetRequiredService<ILogger<Program>>();
+            var username = context.Principal?.Identity?.Name;
+            logger.LogInformation("Token validated for user: {Username}", username);
+            return Task.CompletedTask;
+        }
+    };
+});
 
 builder.Services.AddControllers()
     .AddJsonOptions(options =>
@@ -28,23 +82,63 @@ builder.Services.AddControllers()
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
-    c.SwaggerDoc("v1", new OpenApiInfo 
-    { 
-        Title = "IT Device Manager API", 
+    c.SwaggerDoc("v1", new OpenApiInfo
+    {
+        Title = "IT Device Manager API",
         Version = "v1",
         Description = "API for managing IT devices, network discovery, and Wake-on-LAN operations"
     });
+
+    // Add JWT Authentication to Swagger
+    c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    {
+        Description = "JWT Authorization header using the Bearer scheme. Example: \"Authorization: Bearer {token}\"",
+        Name = "Authorization",
+        In = ParameterLocation.Header,
+        Type = SecuritySchemeType.ApiKey,
+        Scheme = "Bearer"
+    });
+
+    c.AddSecurityRequirement(new OpenApiSecurityRequirement
+    {
+        {
+            new OpenApiSecurityScheme
+            {
+                Reference = new OpenApiReference
+                {
+                    Type = ReferenceType.SecurityScheme,
+                    Id = "Bearer"
+                }
+            },
+            Array.Empty<string>()
+        }
+    });
 });
 
-// Add CORS
+// Add CORS - restrictive policy for security
+var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()
+    ?? new[] { "http://localhost:3000", "https://localhost:3000" };
+
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowAll", policy =>
+    options.AddPolicy("RestrictedCors", policy =>
     {
-        policy.AllowAnyOrigin()
+        policy.WithOrigins(allowedOrigins)
               .AllowAnyMethod()
-              .AllowAnyHeader();
+              .AllowAnyHeader()
+              .AllowCredentials();
     });
+
+    // Development-only permissive policy
+    if (builder.Environment.IsDevelopment())
+    {
+        options.AddPolicy("AllowAll", policy =>
+        {
+            policy.AllowAnyOrigin()
+                  .AllowAnyMethod()
+                  .AllowAnyHeader();
+        });
+    }
 });
 
 var app = builder.Build();
@@ -65,20 +159,41 @@ app.UseStaticFiles(); // 启用静态文件服务
 
 // 设置默认文件
 app.UseDefaultFiles();
-app.UseCors("AllowAll");
+
+// Use appropriate CORS policy based on environment
+app.UseCors(app.Environment.IsDevelopment() ? "AllowAll" : "RestrictedCors");
+
+app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
 
-// Ensure database is created
+// Apply database migrations automatically on startup
 using (var scope = app.Services.CreateScope())
 {
     var context = scope.ServiceProvider.GetRequiredService<DeviceContext>();
-    context.Database.EnsureCreated();
+    var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+
+    try
+    {
+        logger.LogInformation("Applying database migrations...");
+        context.Database.Migrate();
+        logger.LogInformation("Database migrations applied successfully.");
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "An error occurred while migrating the database.");
+
+        // In development, optionally fall back to EnsureCreated for quick setup
+        if (builder.Environment.IsDevelopment())
+        {
+            logger.LogWarning("Falling back to EnsureCreated() in development mode.");
+            context.Database.EnsureCreated();
+        }
+        else
+        {
+            throw; // Fail fast in production
+        }
+    }
 }
 
 app.Run();
-
-record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
-{
-    public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
-}
