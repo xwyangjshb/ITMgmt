@@ -449,13 +449,58 @@ namespace ITDeviceManager.API.Controllers
                 var devices = await _context.Set<Device>().ToListAsync();
                 var device = devices.FirstOrDefault(d => NormalizeMacAddress(d.MACAddress ?? string.Empty) == normalizedMac);
 
+                bool isNewDevice = false;
+
                 if (device == null)
                 {
-                    return NotFound(new
+                    // Auto-register new device with MAC-derived placeholder IP
+                    var formattedMac = FormatMacAddress(normalizedMac);
+                    var placeholderIp = GeneratePlaceholderIpFromMac(normalizedMac);
+
+                    Console.WriteLine($"[WOL] Auto-registering new device - MAC: {formattedMac}, Placeholder IP: {placeholderIp}");
+
+                    device = new Device
                     {
-                        error = "Device not found",
-                        message = $"No device found with MAC address '{macAddress}' (normalized: {FormatMacAddress(normalizedMac)})"
-                    });
+                        Name = formattedMac,  // Use formatted MAC as name (e.g., "AA:BB:CC:DD:EE:FF")
+                        MACAddress = formattedMac,
+                        IPAddress = placeholderIp,  // Placeholder until discovered (e.g., "0.0.238.255")
+                        DeviceType = DeviceType.Computer,  // Assume computer for WOL-capable devices
+                        Status = DeviceStatus.Offline,  // Not yet awakened
+                        WakeOnLanEnabled = true,  // Explicitly enabling since we're sending WOL
+                        CreatedAt = DateTime.UtcNow,
+                        UpdatedAt = DateTime.UtcNow,
+                        LastSeen = DateTime.UtcNow
+                    };
+
+                    try
+                    {
+                        _context.Set<Device>().Add(device);
+                        await _context.SaveChangesAsync();
+                        isNewDevice = true;
+
+                        Console.WriteLine($"[WOL] Device auto-registered successfully - ID: {device.Id}, Name: {device.Name}");
+                    }
+                    catch (Microsoft.EntityFrameworkCore.DbUpdateException ex)
+                        when (ex.InnerException?.Message?.Contains("duplicate key") == true)
+                    {
+                        // Handle race condition: another request registered the same MAC concurrently
+                        Console.WriteLine($"[WOL] Concurrent registration detected for MAC {formattedMac}, reloading from database");
+
+                        // Reload from database
+                        devices = await _context.Set<Device>().ToListAsync();
+                        device = devices.FirstOrDefault(d => NormalizeMacAddress(d.MACAddress ?? string.Empty) == normalizedMac);
+
+                        if (device == null)
+                        {
+                            // Still not found - this shouldn't happen, return error
+                            return StatusCode(500, new
+                            {
+                                success = false,
+                                error = "Failed to register or find device",
+                                message = "Concurrent registration error"
+                            });
+                        }
+                    }
                 }
 
                 // Check if WOL is enabled for this device (currently disabled in code)
@@ -486,7 +531,10 @@ namespace ITDeviceManager.API.Controllers
                     return Ok(new
                     {
                         success = true,
-                        message = $"Wake-on-LAN packet sent to {device.Name}",
+                        message = isNewDevice
+                            ? $"Device auto-registered and Wake-on-LAN packet sent to {device.Name} (placeholder IP: {device.IPAddress})"
+                            : $"Wake-on-LAN packet sent to {device.Name}",
+                        isNewDevice = isNewDevice,
                         device = new
                         {
                             device.Id,
@@ -558,6 +606,35 @@ namespace ITDeviceManager.API.Controllers
                 return normalizedMac;
 
             return string.Join(":", Enumerable.Range(0, 6).Select(i => normalizedMac.Substring(i * 2, 2)));
+        }
+
+        /// <summary>
+        /// Generates a unique placeholder IP address from MAC address
+        /// Format: 0.0.X.Y where X,Y are the last 2 bytes of MAC in decimal
+        /// Example: MAC AA:BB:CC:DD:EE:FF (normalized: AABBCCDDEEFF) -> 0.0.238.255
+        /// </summary>
+        private string GeneratePlaceholderIpFromMac(string normalizedMac)
+        {
+            if (string.IsNullOrEmpty(normalizedMac) || normalizedMac.Length != 12)
+                return "0.0.0.1"; // Fallback
+
+            try
+            {
+                // Extract last 2 bytes (characters 8-11 of 12-char string)
+                string byte5Hex = normalizedMac.Substring(8, 2);   // e.g., "EE"
+                string byte6Hex = normalizedMac.Substring(10, 2);  // e.g., "FF"
+
+                // Convert to decimal
+                int byte5 = Convert.ToInt32(byte5Hex, 16);  // e.g., 238
+                int byte6 = Convert.ToInt32(byte6Hex, 16);  // e.g., 255
+
+                // Generate placeholder IP in 0.0.X.Y format
+                return $"0.0.{byte5}.{byte6}";
+            }
+            catch
+            {
+                return "0.0.0.1"; // Fallback on any error
+            }
         }
 
         /// <summary>
