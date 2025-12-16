@@ -2,24 +2,24 @@ using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
 
-namespace ITDeviceManager.API.Migrations
+namespace ITDeviceManager.API.Migrations;
+
+/// <inheritdoc />
+public partial class UpdateDeviceTypeToEnum : Migration
 {
     /// <inheritdoc />
-    public partial class UpdateDeviceTypeToEnum : Migration
+    protected override void Up(MigrationBuilder migrationBuilder)
     {
-        /// <inheritdoc />
-        protected override void Up(MigrationBuilder migrationBuilder)
-        {
-            // 首先添加新的临时列
-            migrationBuilder.AddColumn<int>(
-                name: "DeviceTypeTemp",
-                table: "Device",
-                type: "int",
-                nullable: false,
-                defaultValue: 0);
+        // 首先添加新的临时列
+        migrationBuilder.AddColumn<int>(
+            name: "DeviceTypeTemp",
+            table: "Device",
+            type: "int",
+            nullable: false,
+            defaultValue: 0);
 
-            // 更新数据：将字符串值转换为对应的枚举值
-            migrationBuilder.Sql(@"
+        // 更新数据：将字符串值转换为对应的枚举值
+        migrationBuilder.Sql(@"
                 UPDATE Device 
                 SET DeviceTypeTemp = CASE 
                     WHEN DeviceType = 'Computer' THEN 1
@@ -35,30 +35,29 @@ namespace ITDeviceManager.API.Migrations
                     ELSE 0
                 END");
 
-            // 删除原列
-            migrationBuilder.DropColumn(
-                name: "DeviceType",
-                table: "Device");
+        // 删除原列
+        migrationBuilder.DropColumn(
+            name: "DeviceType",
+            table: "Device");
 
-            // 重命名临时列
-            migrationBuilder.RenameColumn(
-                name: "DeviceTypeTemp",
-                table: "Device",
-                newName: "DeviceType");
-        }
+        // 重命名临时列
+        migrationBuilder.RenameColumn(
+            name: "DeviceTypeTemp",
+            table: "Device",
+            newName: "DeviceType");
+    }
 
-        /// <inheritdoc />
-        protected override void Down(MigrationBuilder migrationBuilder)
-        {
-            migrationBuilder.AlterColumn<string>(
-                name: "DeviceType",
-                table: "Device",
-                type: "nvarchar(50)",
-                maxLength: 50,
-                nullable: true,
-                oldClrType: typeof(int),
-                oldType: "int",
-                oldMaxLength: 50);
-        }
+    /// <inheritdoc />
+    protected override void Down(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.AlterColumn<string>(
+            name: "DeviceType",
+            table: "Device",
+            type: "nvarchar(50)",
+            maxLength: 50,
+            nullable: true,
+            oldClrType: typeof(int),
+            oldType: "int",
+            oldMaxLength: 50);
     }
 }

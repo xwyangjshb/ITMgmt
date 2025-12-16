@@ -1,10 +1,9 @@
-namespace ITDeviceManager.API.Services
+namespace ITDeviceManager.API.Services;
+
+public interface IAuthService
 {
-    public interface IAuthService
-    {
-        Task<string?> AuthenticateAsync(string username, string password);
-        string GenerateJwtToken(string username, string role);
-        string HashPassword(string password);
-        bool VerifyPassword(string password, string hash);
-    }
+    public Task<string?> AuthenticateAsync(string username, string password);
+    public string GenerateJwtToken(string username, string role);
+    public string HashPassword(string password);
+    public bool VerifyPassword(string password, string hash);
 }

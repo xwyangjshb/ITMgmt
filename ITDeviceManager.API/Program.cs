@@ -1,14 +1,24 @@
-using Microsoft.EntityFrameworkCore;
-using Microsoft.OpenApi.Models;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
-using Microsoft.IdentityModel.Tokens;
 using System.Text;
 using ITDeviceManager.API.Data;
 using ITDeviceManager.API.Services;
 using ITDeviceManager.API.Utils;
 using ITDeviceManager.Core.Services;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
+using Microsoft.OpenApi.Models;
+using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// 配置Serilog
+Log.Logger = new LoggerConfiguration()
+    .ReadFrom.Configuration(builder.Configuration)
+    .Enrich.FromLogContext()
+    .CreateLogger();
+
+// 使用Serilog替换默认日志提供程序
+builder.Host.UseSerilog();
 
 // Add services to the container.
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
@@ -24,9 +34,11 @@ builder.Services.AddDbContext<DeviceContext>(options =>
 builder.Services.AddScoped<INetworkDiscoveryService, NetworkDiscoveryService>();
 builder.Services.AddScoped<IWakeOnLanService, WakeOnLanService>();
 builder.Services.AddScoped<IAuthService, AuthService>();
+builder.Services.AddScoped<IMagicPacketListenerService, ITDeviceManager.API.Services.MagicPacketListenerService>();
 
 // 注册后台服务
 builder.Services.AddHostedService<ITDeviceManager.API.Services.DeviceDiscoveryBackgroundService>();
+builder.Services.AddHostedService<ITDeviceManager.API.Services.MagicPacketBackgroundService>();
 
 // Configure JWT Authentication
 var jwtSecretKey = builder.Configuration["Jwt:SecretKey"];

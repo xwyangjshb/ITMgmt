@@ -125,6 +125,55 @@ namespace ITDeviceManager.API.Migrations
                     b.ToTable("DeviceRelations");
                 });
 
+            modelBuilder.Entity("ITDeviceManager.Core.Models.MagicPacketCapture", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTime>("CapturedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<bool>("IsValid")
+                        .HasColumnType("bit");
+
+                    b.Property<int?>("MatchedDeviceId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("MatchedDeviceName")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("Notes")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<int>("PacketSize")
+                        .HasColumnType("int");
+
+                    b.Property<string>("SourceIPAddress")
+                        .IsRequired()
+                        .HasMaxLength(45)
+                        .HasColumnType("nvarchar(45)");
+
+                    b.Property<string>("TargetMACAddress")
+                        .IsRequired()
+                        .HasMaxLength(17)
+                        .HasColumnType("nvarchar(17)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CapturedAt");
+
+                    b.HasIndex("MatchedDeviceId");
+
+                    b.HasIndex("TargetMACAddress");
+
+                    b.ToTable("MagicPacketCaptures");
+                });
+
             modelBuilder.Entity("ITDeviceManager.Core.Models.PowerOperation", b =>
                 {
                     b.Property<int>("Id")
@@ -230,6 +279,16 @@ namespace ITDeviceManager.API.Migrations
                     b.Navigation("ChildDevice");
 
                     b.Navigation("ParentDevice");
+                });
+
+            modelBuilder.Entity("ITDeviceManager.Core.Models.MagicPacketCapture", b =>
+                {
+                    b.HasOne("ITDeviceManager.Core.Models.Device", "MatchedDevice")
+                        .WithMany()
+                        .HasForeignKey("MatchedDeviceId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.Navigation("MatchedDevice");
                 });
 
             modelBuilder.Entity("ITDeviceManager.Core.Models.PowerOperation", b =>

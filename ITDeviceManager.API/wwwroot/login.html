@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>登录 - IT设备管理系统</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
+    <style>
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .login-container {
+            max-width: 400px;
+            width: 100%;
+        }
+        .login-card {
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            padding: 2rem;
+        }
+        .login-header {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+        .login-header i {
+            font-size: 3rem;
+            color: #667eea;
+        }
+        .login-header h2 {
+            margin-top: 1rem;
+            color: #333;
+        }
+        .btn-login {
+            width: 100%;
+            padding: 0.75rem;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border: none;
+            color: white;
+            font-weight: bold;
+        }
+        .btn-login:hover {
+            opacity: 0.9;
+            color: white;
+        }
+        .init-admin-section {
+            margin-top: 2rem;
+            padding-top: 2rem;
+            border-top: 1px solid #dee2e6;
+        }
+        .alert {
+            font-size: 0.9rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <div class="login-card">
+            <div class="login-header">
+                <i class="bi bi-shield-lock"></i>
+                <h2>IT设备管理系统</h2>
+                <p class="text-muted">请登录以继续</p>
+            </div>
+
+            <!-- 错误/成功提示 -->
+            <div id="alertContainer"></div>
+
+            <!-- 登录表单 -->
+            <form id="loginForm">
+                <div class="mb-3">
+                    <label for="username" class="form-label">用户名</label>
+                    <div class="input-group">
+                        <span class="input-group-text"><i class="bi bi-person"></i></span>
+                        <input type="text" class="form-control" id="username" placeholder="请输入用户名" required>
+                    </div>
+                </div>
+                <div class="mb-3">
+                    <label for="password" class="form-label">密码</label>
+                    <div class="input-group">
+                        <span class="input-group-text"><i class="bi bi-lock"></i></span>
+                        <input type="password" class="form-control" id="password" placeholder="请输入密码" required>
+                    </div>
+                </div>
+                <button type="submit" class="btn btn-login">
+                    <i class="bi bi-box-arrow-in-right me-2"></i>登录
+                </button>
+            </form>
+
+            <!-- 初始化管理员部分 -->
+            <div class="init-admin-section">
+                <p class="text-muted text-center mb-3">
+                    <small>首次使用？初始化默认管理员账户</small>
+                </p>
+                <button class="btn btn-outline-secondary w-100" onclick="initializeAdmin()">
+                    <i class="bi bi-person-plus me-2"></i>初始化管理员账户
+                </button>
+                <div class="mt-2">
+                    <small class="text-muted">
+                        默认账户：admin / Admin@123<br>
+                        <span class="text-danger">请登录后立即修改密码！</span>
+                    </small>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // 登录表单提交
+        document.getElementById('loginForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+
+            showAlert('info', '正在登录...', false);
+
+            try {
+                const response = await fetch('/api/Auth/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ username, password })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    // 保存token到localStorage
+                    localStorage.setItem('authToken', data.token);
+                    localStorage.setItem('username', data.username);
+
+                    showAlert('success', '登录成功！正在跳转...', false);
+
+                    // 跳转到主页
+                    setTimeout(() => {
+                        window.location.href = '/index.html';
+                    }, 1000);
+                } else {
+                    showAlert('danger', data.error || '登录失败，请检查用户名和密码');
+                }
+            } catch (error) {
+                console.error('Login error:', error);
+                showAlert('danger', '登录失败：' + error.message);
+            }
+        });
+
+        // 初始化管理员账户
+        async function initializeAdmin() {
+            if (!confirm('确定要创建默认管理员账户吗？\n用户名：admin\n密码：Admin@123')) {
+                return;
+            }
+
+            showAlert('info', '正在初始化...', false);
+
+            try {
+                const response = await fetch('/api/Auth/init', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    showAlert('success',
+                        '管理员账户创建成功！<br>' +
+                        '<strong>用户名：</strong>admin<br>' +
+                        '<strong>密码：</strong>Admin@123<br>' +
+                        '<span class="text-danger">请立即登录并修改密码！</span>');
+
+                    // 自动填充登录表单
+                    document.getElementById('username').value = 'admin';
+                    document.getElementById('password').value = 'Admin@123';
+                } else {
+                    showAlert('danger', data.error || '初始化失败');
+                }
+            } catch (error) {
+                console.error('Init error:', error);
+                showAlert('danger', '初始化失败：' + error.message);
+            }
+        }
+
+        // 显示提示消息
+        function showAlert(type, message, dismissible = true) {
+            const alertContainer = document.getElementById('alertContainer');
+            const dismissBtn = dismissible ?
+                '<button type="button" class="btn-close" data-bs-dismiss="alert"></button>' : '';
+
+            alertContainer.innerHTML = `
+                <div class="alert alert-${type} ${dismissible ? 'alert-dismissible' : ''} fade show" role="alert">
+                    ${message}
+                    ${dismissBtn}
+                </div>
+            `;
+
+            if (!dismissible) {
+                setTimeout(() => {
+                    const alert = alertContainer.querySelector('.alert');
+                    if (alert) {
+                        alert.classList.remove('show');
+                        setTimeout(() => alertContainer.innerHTML = '', 150);
+                    }
+                }, 3000);
+            }
+        }
+
+        // 检查是否已登录
+        window.addEventListener('DOMContentLoaded', () => {
+            const token = localStorage.getItem('authToken');
+            if (token) {
+                // 验证token是否有效
+                fetch('/api/Auth/users', {
+                    headers: {
+                        'Authorization': 'Bearer ' + token
+                    }
+                })
+                .then(response => {
+                    if (response.ok) {
+                        // Token有效，跳转到主页
+                        window.location.href = '/index.html';
+                    }
+                })
+                .catch(() => {
+                    // Token无效，清除并继续显示登录页
+                    localStorage.removeItem('authToken');
+                    localStorage.removeItem('username');
+                });
+            }
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>日志查看 - IT设备管理系统</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
+    <style>
+        .log-entry {
+            font-family: 'Courier New', monospace;
+            font-size: 0.9rem;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .log-level-Information {
+            color: #0d6efd;
+        }
+        .log-level-Warning {
+            color: #ffc107;
+        }
+        .log-level-Error {
+            color: #dc3545;
+        }
+        .log-level-Debug {
+            color: #6c757d;
+        }
+        .highlight {
+            background-color: yellow;
+            font-weight: bold;
+        }
+        .stat-card {
+            border-left: 4px solid #0d6efd;
+        }
+        .no-data {
+            text-align: center;
+            padding: 3rem;
+            color: #6c757d;
+        }
+        .filter-section {
+            background-color: #f8f9fa;
+            padding: 1rem;
+            border-radius: 0.25rem;
+            margin-bottom: 1rem;
+        }
+        .exception-text {
+            color: #dc3545;
+            background-color: #f8d7da;
+            padding: 0.5rem;
+            border-radius: 0.25rem;
+            margin-top: 0.5rem;
+        }
+        .properties-section {
+            background-color: #e9ecef;
+            padding: 0.5rem;
+            border-radius: 0.25rem;
+            margin-top: 0.5rem;
+            font-size: 0.85rem;
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="/index.html">IT设备管理系统</a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav me-auto">
+                    <li class="nav-item">
+                        <a class="nav-link" href="/index.html">设备管理</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="/magic-packets.html">魔术包监听</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link active" href="/logs.html">日志查看</a>
+                    </li>
+                </ul>
+                <ul class="navbar-nav">
+                    <li class="nav-item">
+                        <span class="nav-link" id="usernameDisplay">
+                            <i class="bi bi-person-circle"></i> <span id="currentUsername"></span>
+                        </span>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="#" onclick="logout(); return false;">
+                            <i class="bi bi-box-arrow-right"></i> 退出
+                        </a>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container-fluid mt-4">
+        <div class="row mb-4">
+            <div class="col">
+                <h2><i class="bi bi-journal-text"></i> 日志查看</h2>
+            </div>
+        </div>
+
+        <!-- 统计卡片 -->
+        <div class="row mb-4">
+            <div class="col-md-3">
+                <div class="card stat-card">
+                    <div class="card-body">
+                        <h6 class="card-subtitle mb-2 text-muted">总日志条目</h6>
+                        <h3 class="card-title mb-0" id="totalEntries">-</h3>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-2">
+                <div class="card stat-card">
+                    <div class="card-body">
+                        <h6 class="card-subtitle mb-2 text-muted">错误</h6>
+                        <h3 class="card-title mb-0 text-danger" id="errorCount">-</h3>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-2">
+                <div class="card stat-card">
+                    <div class="card-body">
+                        <h6 class="card-subtitle mb-2 text-muted">警告</h6>
+                        <h3 class="card-title mb-0 text-warning" id="warningCount">-</h3>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-2">
+                <div class="card stat-card">
+                    <div class="card-body">
+                        <h6 class="card-subtitle mb-2 text-muted">信息</h6>
+                        <h3 class="card-title mb-0 text-info" id="infoCount">-</h3>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card stat-card">
+                    <div class="card-body">
+                        <h6 class="card-subtitle mb-2 text-muted">日志文件</h6>
+                        <h3 class="card-title mb-0" id="fileCount">-</h3>
+                        <small class="text-muted" id="totalSize">-</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 搜索和过滤 -->
+        <div class="filter-section">
+            <div class="row g-3">
+                <div class="col-md-3">
+                    <label for="searchInput" class="form-label">关键词搜索</label>
+                    <input type="text" class="form-control" id="searchInput" placeholder="输入搜索关键词...">
+                </div>
+                <div class="col-md-2">
+                    <label for="levelFilter" class="form-label">日志级别</label>
+                    <select class="form-select" id="levelFilter">
+                        <option value="">全部</option>
+                        <option value="Information">Information</option>
+                        <option value="Warning">Warning</option>
+                        <option value="Error">Error</option>
+                        <option value="Debug">Debug</option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <label for="timeRange" class="form-label">时间范围</label>
+                    <select class="form-select" id="timeRange" onchange="handleTimeRangeChange()">
+                        <option value="all">全部</option>
+                        <option value="today">今天</option>
+                        <option value="yesterday">昨天</option>
+                        <option value="last7days">最近7天</option>
+                        <option value="custom">自定义</option>
+                    </select>
+                </div>
+                <div class="col-md-2" id="startDateGroup" style="display: none;">
+                    <label for="startDate" class="form-label">开始日期</label>
+                    <input type="datetime-local" class="form-control" id="startDate">
+                </div>
+                <div class="col-md-2" id="endDateGroup" style="display: none;">
+                    <label for="endDate" class="form-label">结束日期</label>
+                    <input type="datetime-local" class="form-control" id="endDate">
+                </div>
+                <div class="col-md-1">
+                    <label class="form-label">&nbsp;</label>
+                    <button class="btn btn-primary w-100" onclick="searchLogs()">
+                        <i class="bi bi-search"></i> 搜索
+                    </button>
+                </div>
+                <div class="col-md-1">
+                    <label class="form-label">&nbsp;</label>
+                    <button class="btn btn-secondary w-100" onclick="resetFilters()">
+                        <i class="bi bi-x-circle"></i> 重置
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 日志条目 -->
+        <div class="row">
+            <div class="col">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">日志条目</h5>
+                        <span class="text-muted" id="resultCount"></span>
+                    </div>
+                    <div class="card-body">
+                        <div id="logsContainer">
+                            <div class="no-data">
+                                <i class="bi bi-hourglass-split" style="font-size: 3rem;"></i>
+                                <p class="mt-2">加载中...</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 分页 -->
+        <div class="row mt-3">
+            <div class="col">
+                <nav aria-label="Page navigation">
+                    <ul class="pagination justify-content-center" id="pagination">
+                    </ul>
+                </nav>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        let currentPage = 1;
+        let currentSearch = '';
+        const pageSize = 100;
+
+        // 获取认证token
+        function getAuthToken() {
+            return localStorage.getItem('authToken');
+        }
+
+        // 检查是否已登录
+        function checkAuth() {
+            const token = getAuthToken();
+            if (!token) {
+                window.location.href = '/login.html';
+                return false;
+            }
+            return true;
+        }
+
+        // 退出登录
+        function logout() {
+            localStorage.removeItem('authToken');
+            localStorage.removeItem('username');
+            window.location.href = '/login.html';
+        }
+
+        // 页面加载时初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            if (!checkAuth()) return;
+
+            // 显示用户名
+            const username = localStorage.getItem('username');
+            if (username) {
+                document.getElementById('currentUsername').textContent = username;
+            }
+
+            loadStats();
+            loadLogs();
+        });
+
+        // 加载统计信息
+        async function loadStats() {
+            try {
+                const response = await fetch('/api/Logs/stats', {
+                    headers: {
+                        'Authorization': 'Bearer ' + getAuthToken()
+                    }
+                });
+                if (!response.ok) {
+                    if (response.status === 401) {
+                        showError('需要管理员权限访问日志');
+                        localStorage.removeItem('authToken');
+                        window.location.href = '/login.html';
+                        return;
+                    }
+                    throw new Error('Failed to load stats');
+                }
+
+                const data = await response.json();
+
+                document.getElementById('totalEntries').textContent = data.totalEntries || 0;
+                document.getElementById('errorCount').textContent = data.errorCount || 0;
+                document.getElementById('warningCount').textContent = data.warningCount || 0;
+                document.getElementById('infoCount').textContent = data.infoCount || 0;
+                document.getElementById('fileCount').textContent = data.fileCount || 0;
+                document.getElementById('totalSize').textContent = data.totalSizeFormatted || '-';
+            } catch (error) {
+                console.error('Error loading stats:', error);
+                showError('加载统计信息失败');
+            }
+        }
+
+        // 加载日志
+        async function loadLogs(page = 1) {
+            try {
+                const params = new URLSearchParams();
+                params.append('page', page);
+                params.append('pageSize', pageSize);
+
+                const search = document.getElementById('searchInput').value.trim();
+                if (search) params.append('search', search);
+
+                const level = document.getElementById('levelFilter').value;
+                if (level) params.append('level', level);
+
+                const timeRange = document.getElementById('timeRange').value;
+                const { start, end } = getTimeRangeValues(timeRange);
+                if (start) params.append('start', start.toISOString());
+                if (end) params.append('end', end.toISOString());
+
+                const response = await fetch(`/api/Logs?${params}`, {
+                    headers: {
+                        'Authorization': 'Bearer ' + getAuthToken()
+                    }
+                });
+                if (!response.ok) {
+                    if (response.status === 401) {
+                        showError('需要管理员权限访问日志');
+                        localStorage.removeItem('authToken');
+                        window.location.href = '/login.html';
+                        return;
+                    }
+                    throw new Error('Failed to load logs');
+                }
+
+                const result = await response.json();
+
+                console.log('=== API Response Debug ===');
+                console.log('Full response:', result);
+                console.log('Type of result:', typeof result);
+                console.log('result.data exists:', 'data' in result);
+                console.log('result.data type:', typeof result.data);
+                console.log('result.data is array:', Array.isArray(result.data));
+                console.log('result.data value:', result.data);
+                console.log('========================');
+
+                // 检查响应结构并提取数据
+                let logsData = [];
+                let total = 0;
+                let responsePageSize = pageSize;
+
+                if (result && typeof result === 'object') {
+                    // 检查是否有 data 属性
+                    if ('data' in result) {
+                        // 处理 ReferenceHandler.Preserve 格式 (data.$values)
+                        if (result.data && typeof result.data === 'object' && '$values' in result.data) {
+                            logsData = Array.isArray(result.data.$values) ? result.data.$values : [];
+                            console.log('Extracted from $values:', logsData.length, 'entries');
+                        } else if (Array.isArray(result.data)) {
+                            logsData = result.data;
+                        } else {
+                            console.warn('data is not an array or $values object:', result.data);
+                        }
+                        total = result.total || 0;
+                        responsePageSize = result.pageSize || pageSize;
+                    } else if (Array.isArray(result)) {
+                        // 如果整个响应就是数组
+                        logsData = result;
+                        total = result.length;
+                    } else {
+                        console.error('Unexpected response structure:', result);
+                    }
+                }
+
+                console.log('Processed logsData:', logsData);
+                console.log('logsData length:', logsData.length);
+
+                renderLogs(logsData, search);
+                renderPagination(total, page, responsePageSize);
+
+                currentPage = page;
+                currentSearch = search;
+
+                document.getElementById('resultCount').textContent =
+                    `显示 ${logsData.length} / ${result.total || 0} 条`;
+            } catch (error) {
+                console.error('Error loading logs:', error);
+                document.getElementById('logsContainer').innerHTML = `
+                    <div class="no-data">
+                        <i class="bi bi-exclamation-triangle text-danger" style="font-size: 3rem;"></i>
+                        <p class="mt-2">加载日志失败: ${error.message}</p>
+                        <small class="text-muted">请查看浏览器控制台获取详细信息</small>
+                    </div>
+                `;
+            }
+        }
+
+        // 渲染日志条目
+        function renderLogs(logs, searchTerm) {
+            const container = document.getElementById('logsContainer');
+
+            if (!logs || !Array.isArray(logs) || logs.length === 0) {
+                container.innerHTML = `
+                    <div class="no-data">
+                        <i class="bi bi-inbox" style="font-size: 3rem;"></i>
+                        <p class="mt-2">没有找到日志条目</p>
+                    </div>
+                `;
+                return;
+            }
+
+            try {
+                const html = logs.map(log => {
+                const timestamp = new Date(log.timestamp);
+                const levelClass = `log-level-${log.level}`;
+                let message = escapeHtml(log.message || '');
+
+                // 高亮搜索关键词
+                if (searchTerm) {
+                    const regex = new RegExp(`(${escapeRegex(searchTerm)})`, 'gi');
+                    message = message.replace(regex, '<span class="highlight">$1</span>');
+                }
+
+                let html = `
+                    <div class="card mb-2">
+                        <div class="card-body">
+                            <div class="d-flex justify-content-between align-items-start">
+                                <div class="flex-grow-1">
+                                    <span class="badge ${levelClass}">${log.level}</span>
+                                    <small class="text-muted ms-2">${formatDateTime(timestamp)}</small>
+                                    ${log.sourceContext ? `<small class="text-muted ms-2">[${log.sourceContext}]</small>` : ''}
+                                </div>
+                            </div>
+                            <div class="log-entry mt-2">${message}</div>
+                `;
+
+                if (log.exception) {
+                    html += `
+                        <div class="exception-text">
+                            <strong>异常:</strong><br>
+                            ${escapeHtml(log.exception)}
+                        </div>
+                    `;
+                }
+
+                if (log.properties && Object.keys(log.properties).length > 0) {
+                    html += '<div class="properties-section"><strong>属性:</strong><br>';
+                    for (const [key, value] of Object.entries(log.properties)) {
+                        html += `<span class="badge bg-secondary me-1">${key}: ${value}</span> `;
+                    }
+                    html += '</div>';
+                }
+
+                html += `
+                        </div>
+                    </div>
+                `;
+
+                return html;
+                }).join('');
+
+                container.innerHTML = html;
+            } catch (error) {
+                console.error('Error rendering logs:', error);
+                container.innerHTML = `
+                    <div class="no-data">
+                        <i class="bi bi-exclamation-triangle text-danger" style="font-size: 3rem;"></i>
+                        <p class="mt-2">渲染日志时出错: ${error.message}</p>
+                    </div>
+                `;
+            }
+        }
+
+        // 渲染分页
+        function renderPagination(total, currentPage, pageSize) {
+            const totalPages = Math.ceil(total / pageSize);
+            const pagination = document.getElementById('pagination');
+
+            if (totalPages <= 1) {
+                pagination.innerHTML = '';
+                return;
+            }
+
+            let html = `
+                <li class="page-item ${currentPage === 1 ? 'disabled' : ''}">
+                    <a class="page-link" href="#" onclick="loadLogs(${currentPage - 1}); return false;">上一页</a>
+                </li>
+            `;
+
+            let startPage = Math.max(1, currentPage - 3);
+            let endPage = Math.min(totalPages, currentPage + 3);
+
+            if (startPage > 1) {
+                html += `<li class="page-item"><a class="page-link" href="#" onclick="loadLogs(1); return false;">1</a></li>`;
+                if (startPage > 2) {
+                    html += `<li class="page-item disabled"><span class="page-link">...</span></li>`;
+                }
+            }
+
+            for (let i = startPage; i <= endPage; i++) {
+                html += `
+                    <li class="page-item ${i === currentPage ? 'active' : ''}">
+                        <a class="page-link" href="#" onclick="loadLogs(${i}); return false;">${i}</a>
+                    </li>
+                `;
+            }
+
+            if (endPage < totalPages) {
+                if (endPage < totalPages - 1) {
+                    html += `<li class="page-item disabled"><span class="page-link">...</span></li>`;
+                }
+                html += `<li class="page-item"><a class="page-link" href="#" onclick="loadLogs(${totalPages}); return false;">${totalPages}</a></li>`;
+            }
+
+            html += `
+                <li class="page-item ${currentPage === totalPages ? 'disabled' : ''}">
+                    <a class="page-link" href="#" onclick="loadLogs(${currentPage + 1}); return false;">下一页</a>
+                </li>
+            `;
+
+            pagination.innerHTML = html;
+        }
+
+        // 搜索日志
+        function searchLogs() {
+            loadLogs(1);
+        }
+
+        // 重置过滤器
+        function resetFilters() {
+            document.getElementById('searchInput').value = '';
+            document.getElementById('levelFilter').value = '';
+            document.getElementById('timeRange').value = 'all';
+            handleTimeRangeChange();
+            loadLogs(1);
+        }
+
+        // 处理时间范围变化
+        function handleTimeRangeChange() {
+            const timeRange = document.getElementById('timeRange').value;
+            const startDateGroup = document.getElementById('startDateGroup');
+            const endDateGroup = document.getElementById('endDateGroup');
+
+            if (timeRange === 'custom') {
+                startDateGroup.style.display = 'block';
+                endDateGroup.style.display = 'block';
+            } else {
+                startDateGroup.style.display = 'none';
+                endDateGroup.style.display = 'none';
+            }
+        }
+
+        // 获取时间范围值
+        function getTimeRangeValues(timeRange) {
+            const now = new Date();
+            let start = null;
+            let end = null;
+
+            switch (timeRange) {
+                case 'today':
+                    start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+                    break;
+                case 'yesterday':
+                    start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+                    end = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+                    break;
+                case 'last7days':
+                    start = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+                    break;
+                case 'custom':
+                    const startInput = document.getElementById('startDate').value;
+                    const endInput = document.getElementById('endDate').value;
+                    if (startInput) start = new Date(startInput);
+                    if (endInput) end = new Date(endInput);
+                    break;
+            }
+
+            return { start, end };
+        }
+
+        // 格式化日期时间
+        function formatDateTime(date) {
+            return date.toLocaleString('zh-CN', {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit'
+            });
+        }
+
+        // HTML转义
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // 正则转义
+        function escapeRegex(text) {
+            return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        }
+
+        // 显示错误消息
+        function showError(message) {
+            alert(message);
+        }
+
+        // 回车键搜索
+        document.getElementById('searchInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                searchLogs();
+            }
+        });
+    </script>
+</body>
+</html>
