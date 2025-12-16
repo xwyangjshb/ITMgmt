@@ -5,6 +5,7 @@ using Microsoft.IdentityModel.Tokens;
 using System.Text;
 using ITDeviceManager.API.Data;
 using ITDeviceManager.API.Services;
+using ITDeviceManager.API.Utils;
 using ITDeviceManager.Core.Services;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -77,6 +78,8 @@ builder.Services.AddControllers()
         options.JsonSerializerOptions.ReferenceHandler = System.Text.Json.Serialization.ReferenceHandler.Preserve;
         options.JsonSerializerOptions.DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull;
         options.JsonSerializerOptions.MaxDepth = 32;
+        // 添加自定义 DateTime 转换器，将 UTC 时间转换为中国标准时间 (UTC+8)
+        options.JsonSerializerOptions.Converters.Add(new ChinaDateTimeConverter());
     });
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
@@ -144,7 +147,7 @@ builder.Services.AddCors(options =>
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
-if (app.Environment.IsDevelopment())
+if (true || app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI(c =>

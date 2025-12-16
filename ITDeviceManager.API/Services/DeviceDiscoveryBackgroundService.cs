@@ -128,31 +128,37 @@ namespace ITDeviceManager.API.Services
                             else
                             {
                                 // 更新现有设备信息
-                                bool hasChanges = false;
-                                
                                 if (existingDevice.IPAddress != device.IPAddress)
                                 {
-                                    _logger.LogInformation($"[后台服务] 设备 {existingDevice.Name} IP地址变更: {existingDevice.IPAddress} -> {device.IPAddress}");
-                                    existingDevice.IPAddress = device.IPAddress;
-                                    hasChanges = true;
+                                    // 检查新IP是否已被其他设备使用
+                                    var conflictingDevice = await context.Set<Core.Models.Device>()
+                                        .FirstOrDefaultAsync(d => d.IPAddress == device.IPAddress && d.Id != existingDevice.Id);
+
+                                    if (conflictingDevice != null)
+                                    {
+                                        _logger.LogWarning($"[后台服务] IP冲突: 设备 {existingDevice.Name} (MAC: {existingDevice.MACAddress}) 尝试更改到IP {device.IPAddress}，但该IP已被设备 {conflictingDevice.Name} (MAC: {conflictingDevice.MACAddress}) 使用。跳过IP更新。");
+                                        // 不更新IP地址，继续处理其他字段
+                                    }
+                                    else
+                                    {
+                                        _logger.LogInformation($"[后台服务] 设备 {existingDevice.Name} IP地址变更: {existingDevice.IPAddress} -> {device.IPAddress}");
+                                        existingDevice.IPAddress = device.IPAddress;
+                                    }
                                 }
-                                
+
                                 if (existingDevice.Status != device.Status)
                                 {
                                     existingDevice.Status = device.Status;
-                                    hasChanges = true;
                                 }
-                                
+
                                 if (existingDevice.DeviceType != device.DeviceType && device.DeviceType != Core.Models.DeviceType.Unknown)
                                 {
                                     existingDevice.DeviceType = device.DeviceType;
-                                    hasChanges = true;
                                 }
-                                
+
                                 if (string.IsNullOrEmpty(existingDevice.Name) || existingDevice.Name == existingDevice.IPAddress)
                                 {
                                     existingDevice.Name = device.Name;
-                                    hasChanges = true;
                                 }
 
                                 // 总是刷新 LastSeen / UpdatedAt，表示刚刚被发现
@@ -174,6 +180,23 @@ namespace ITDeviceManager.API.Services
                     {
                         await context.SaveChangesAsync();
                         _logger.LogInformation($"网络段 {networkRange} 扫描完成并保存到数据库");
+                    }
+                    catch (DbUpdateException dbEx)
+                    {
+                        _logger.LogError(dbEx, $"保存网络段 {networkRange} 的扫描结果时发生数据库更新错误: {dbEx.Message}");
+
+                        // 如果是唯一约束冲突，记录详细信息
+                        if (dbEx.InnerException?.Message?.Contains("duplicate key") == true ||
+                            dbEx.InnerException?.Message?.Contains("unique index") == true)
+                        {
+                            _logger.LogWarning($"检测到唯一约束冲突，这可能是由于并发更新导致。将在下次扫描时重试。");
+                        }
+
+                        // 丢弃所有更改，避免影响下一次扫描
+                        foreach (var entry in context.ChangeTracker.Entries())
+                        {
+                            entry.State = EntityState.Detached;
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -218,22 +241,40 @@ namespace ITDeviceManager.API.Services
         
         private async Task UpdateOfflineDevices(DeviceContext context)
         {
-            var offlineThreshold = DateTime.UtcNow.AddMinutes(-60); // 60分钟未见视为离线
-            
-            var devicesToUpdate = await context.Set<Core.Models.Device>()
-                .Where(d => d.Status == Core.Models.DeviceStatus.Online && d.LastSeen < offlineThreshold)
-                .ToListAsync();
-                
-            foreach (var device in devicesToUpdate)
+            try
             {
-                device.Status = Core.Models.DeviceStatus.Offline;
-                device.UpdatedAt = DateTime.UtcNow;
-                _logger.LogInformation("设备 {Name} ({IPAddress}) 已标记为离线", device.Name, device.IPAddress);
+                var offlineThreshold = DateTime.UtcNow.AddMinutes(-60); // 60分钟未见视为离线
+
+                var devicesToUpdate = await context.Set<Core.Models.Device>()
+                    .Where(d => d.Status == Core.Models.DeviceStatus.Online && d.LastSeen < offlineThreshold)
+                    .ToListAsync();
+
+                foreach (var device in devicesToUpdate)
+                {
+                    device.Status = Core.Models.DeviceStatus.Offline;
+                    device.UpdatedAt = DateTime.UtcNow;
+                    _logger.LogInformation("设备 {Name} ({IPAddress}) 已标记为离线", device.Name, device.IPAddress);
+                }
+
+                if (devicesToUpdate.Count > 0)
+                {
+                    await context.SaveChangesAsync();
+                    _logger.LogInformation($"成功更新 {devicesToUpdate.Count} 个离线设备状态");
+                }
             }
-            
-            if (devicesToUpdate.Count > 0)
+            catch (DbUpdateException dbEx)
             {
-                await context.SaveChangesAsync();
+                _logger.LogError(dbEx, $"更新离线设备状态时发生数据库错误: {dbEx.Message}");
+
+                // 丢弃更改
+                foreach (var entry in context.ChangeTracker.Entries())
+                {
+                    entry.State = EntityState.Detached;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "更新离线设备状态时发生错误");
             }
         }
     }
