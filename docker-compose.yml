@@ -1,0 +1,70 @@
+version: '3.8'
+
+services:
+  itdevicemanager:
+    container_name: itdevicemanager
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BUILD_CONFIGURATION: Release
+    image: itdevicemanager:latest
+
+    # 端口映射
+    ports:
+      - "10590:10590"      # HTTP API
+      - "7:7/udp"          # 魔术包监听
+      - "9:9/udp"          # 魔术包监听
+
+    # 环境变量
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ASPNETCORE_URLS=http://+:10590
+      - ConnectionStrings__DefaultConnection=Data Source=/app/data/ITDeviceManager.db;Cache=Shared
+      - TZ=Asia/Shanghai
+      # JWT 配置（生产环境请修改密钥）
+      - Jwt__SecretKey=CHANGE_THIS_TO_A_SECURE_KEY_IN_PRODUCTION_AT_LEAST_32_CHARACTERS_LONG
+      - Jwt__Issuer=ITDeviceManager
+      - Jwt__Audience=ITDeviceManagerAPI
+      - Jwt__ExpirationMinutes=60
+      # 后台服务配置
+      - DeviceDiscovery__ScanIntervalMinutes=30
+      - DeviceDiscovery__RetryDelayMinutes=5
+      - DeviceDiscovery__OfflineThresholdMinutes=60
+
+    # 数据卷挂载
+    volumes:
+      - itdevicemanager-data:/app/data      # 数据库文件
+      - itdevicemanager-logs:/app/logs      # 日志文件
+
+    # 网络模式（host 模式用于网络发现功能）
+    # 注意：host 模式在 Linux 下工作最佳，Windows/Mac 下可能需要改为 bridge
+    network_mode: host
+
+    # 重启策略
+    restart: unless-stopped
+
+    # 健康检查
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:10590/api/devices"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    # 资源限制
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+
+# 数据卷定义
+volumes:
+  itdevicemanager-data:
+    driver: local
+  itdevicemanager-logs:
+    driver: local
