@@ -26,4 +26,9 @@
     <ProjectReference Include="..\ITDeviceManager.Core\ITDeviceManager.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Copy vendorMacs.xml from solution root to output directory -->
+    <None Include="..\vendorMacs.xml" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

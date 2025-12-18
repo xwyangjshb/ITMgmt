@@ -75,7 +75,7 @@ function displayDevices(devices) {
                         <i class="fas fa-ethernet me-1"></i>${device.macAddress}
                     </p>
                     <p class="card-text small">
-                        <i class="${getDeviceTypeIcon(device.deviceType)} me-1"></i>${getDeviceTypeText(device.deviceType)} | 
+                        <i class="fas fa-building me-1"></i>${device.manufacturer || '未知厂家'} |
                         最后在线: ${formatDateTime(device.lastSeen)}
                     </p>
                     <div class="btn-group w-100" role="group">
@@ -247,6 +247,7 @@ async function showDeviceDetails(deviceId) {
                         <tr><td>名称:</td><td>${device.name}</td></tr>
                         <tr><td>IP地址:</td><td>${device.ipAddress}</td></tr>
                         <tr><td>MAC地址:</td><td>${device.macAddress}</td></tr>
+                        <tr><td>厂家/制造商:</td><td><i class="fas fa-building me-1"></i>${device.manufacturer || '未知厂家'}</td></tr>
                         <tr><td>设备类型:</td><td><i class="${getDeviceTypeIcon(device.deviceType)} me-1"></i>${getDeviceTypeText(device.deviceType)}</td></tr>
                         <tr><td>操作系统:</td><td>${device.operatingSystem || '未知'}</td></tr>
                         <tr><td>状态:</td><td><span class="badge ${getStatusBadgeClass(device.status)}">${getStatusText(device.status)}</span></td></tr>

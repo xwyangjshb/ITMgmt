@@ -10,10 +10,12 @@ namespace ITDeviceManager.Core.Services;
 public class NetworkDiscoveryService : INetworkDiscoveryService
 {
     private readonly ILogger<NetworkDiscoveryService> _logger;
+    private readonly MacVendorService? _macVendorService;
 
-    public NetworkDiscoveryService(ILogger<NetworkDiscoveryService> logger)
+    public NetworkDiscoveryService(ILogger<NetworkDiscoveryService> logger, MacVendorService? macVendorService = null)
     {
         _logger = logger;
+        _macVendorService = macVendorService;
     }
 
     public async Task<List<Device>> DiscoverDevicesAsync(string networkRange)
@@ -55,6 +57,9 @@ public class NetworkDiscoveryService : INetworkDiscoveryService
             // 由于未定义设备类型识别方法，暂时返回默认值
             var deviceType = await IdentifyDeviceTypeAsync(ipAddress, macAddress, hostname);
 
+            // Get vendor/manufacturer name from MAC address
+            var manufacturer = _macVendorService?.GetVendorByMacPrefix(macAddress) ?? "Unknown";
+
             return new Device
             {
                 Name = hostname ?? ipAddress,
@@ -62,7 +67,8 @@ public class NetworkDiscoveryService : INetworkDiscoveryService
                 MACAddress = macAddress,
                 Status = DeviceStatus.Online,
                 LastSeen = DateTime.UtcNow,
-                DeviceType = deviceType
+                DeviceType = deviceType,
+                Manufacturer = manufacturer
             };
         }
         catch

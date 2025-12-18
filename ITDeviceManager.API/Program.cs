@@ -48,6 +48,9 @@ builder.Services.AddScoped<IWakeOnLanService, WakeOnLanService>();
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IMagicPacketListenerService, ITDeviceManager.API.Services.MagicPacketListenerService>();
 
+// Register MAC Vendor Service as Singleton (loaded once at startup)
+builder.Services.AddSingleton<MacVendorService>();
+
 // 注册后台服务
 builder.Services.AddHostedService<ITDeviceManager.API.Services.DeviceDiscoveryBackgroundService>();
 builder.Services.AddHostedService<ITDeviceManager.API.Services.MagicPacketBackgroundService>();
@@ -247,6 +250,33 @@ using (var scope = app.Services.CreateScope())
         {
             throw; // Fail fast in production
         }
+    }
+
+    // Load MAC Vendor mappings from XML file
+    try
+    {
+        var macVendorService = scope.ServiceProvider.GetRequiredService<MacVendorService>();
+        var xmlFilePath = Path.Combine(AppContext.BaseDirectory, "vendorMacs.xml");
+
+        // Try alternate path if not found in base directory
+        if (!File.Exists(xmlFilePath))
+        {
+            xmlFilePath = Path.Combine(Directory.GetCurrentDirectory(), "vendorMacs.xml");
+        }
+
+        if (File.Exists(xmlFilePath))
+        {
+            var count = macVendorService.LoadFromXml(xmlFilePath);
+            logger.LogInformation("Successfully loaded {Count} MAC vendor mappings from {FilePath}", count, xmlFilePath);
+        }
+        else
+        {
+            logger.LogWarning("vendorMacs.xml file not found. MAC vendor lookup will return 'Unknown' for all devices.");
+        }
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to load MAC vendor mappings. Service will continue with empty vendor database.");
     }
 }
 
