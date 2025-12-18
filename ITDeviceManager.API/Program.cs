@@ -28,7 +28,19 @@ if (string.IsNullOrEmpty(connectionString))
 }
 
 builder.Services.AddDbContext<DeviceContext>(options =>
-    options.UseSqlServer(connectionString));
+{
+    options.UseSqlite(connectionString, sqliteOptions =>
+    {
+        // 配置命令超时（秒）
+        sqliteOptions.CommandTimeout(60);
+    });
+
+    // 启用敏感数据日志（生产环境应关闭）
+    if (builder.Environment.IsDevelopment())
+    {
+        options.EnableSensitiveDataLogging();
+    }
+});
 
 // Register services
 builder.Services.AddScoped<INetworkDiscoveryService, NetworkDiscoveryService>();
@@ -193,6 +205,33 @@ using (var scope = app.Services.CreateScope())
         logger.LogInformation("Applying database migrations...");
         context.Database.Migrate();
         logger.LogInformation("Database migrations applied successfully.");
+
+        // 启用 SQLite WAL 模式以优化并发性能
+        // WAL (Write-Ahead Logging) 允许读操作和写操作并发执行
+        var connection = context.Database.GetDbConnection();
+        connection.Open();
+        using (var command = connection.CreateCommand())
+        {
+            // 启用 WAL 模式
+            command.CommandText = "PRAGMA journal_mode=WAL;";
+            var walResult = command.ExecuteScalar();
+            logger.LogInformation("SQLite WAL mode enabled: {Result}", walResult);
+
+            // 优化缓存大小（2000 页 = ~8MB，适合小型应用）
+            command.CommandText = "PRAGMA cache_size=-8000;";
+            command.ExecuteNonQuery();
+
+            // 设置同步模式为 NORMAL（平衡性能和安全性）
+            command.CommandText = "PRAGMA synchronous=NORMAL;";
+            command.ExecuteNonQuery();
+
+            // 设置忙碌超时（5秒）- 防止并发写入时立即失败
+            command.CommandText = "PRAGMA busy_timeout=5000;";
+            command.ExecuteNonQuery();
+
+            logger.LogInformation("SQLite performance optimizations applied.");
+        }
+        connection.Close();
     }
     catch (Exception ex)
     {
