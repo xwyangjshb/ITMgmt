@@ -79,48 +79,17 @@ namespace ITDeviceManager.Core.Services
                 return "Unknown";
             }
 
-            // Normalize MAC address format (remove dashes, convert to uppercase)
+            // Normalize MAC address format (convert to uppercase, ensure colon separators)
             string normalizedMac = macAddress.Replace("-", ":").ToUpper().Trim();
 
-            // Extract first 8 characters (e.g., "00:00:0C" from "00:00:0C:12:34:56")
-            string prefix8Char = normalizedMac.Length >= 8 ? normalizedMac.Substring(0, 8) : normalizedMac;
+            // Find vendor by checking if the device MAC starts with any known prefix
+            // Sort by prefix length (longest first) to get most specific match
+            var mapping = _vendorMappings
+                .Where(m => normalizedMac.StartsWith(m.MacPrefix, StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(m => m.MacPrefix.Length)
+                .FirstOrDefault();
 
-            // Try to find exact match for 8-character prefix (e.g., "00:00:0C")
-            var mapping = _vendorMappings.FirstOrDefault(m =>
-                m.MacPrefix.Equals(prefix8Char, StringComparison.OrdinalIgnoreCase));
-
-            if (mapping != null)
-            {
-                return mapping.VendorName;
-            }
-
-            // Try to find match with 6-character prefix (e.g., "00:00:0" for shorter MACs)
-            if (normalizedMac.Length >= 7)
-            {
-                string prefix7Char = normalizedMac.Substring(0, 7);
-                mapping = _vendorMappings.FirstOrDefault(m =>
-                    m.MacPrefix.StartsWith(prefix7Char, StringComparison.OrdinalIgnoreCase));
-
-                if (mapping != null)
-                {
-                    return mapping.VendorName;
-                }
-            }
-
-            // Try to find match with first 5 characters (e.g., "00:00")
-            if (normalizedMac.Length >= 5)
-            {
-                string prefix5Char = normalizedMac.Substring(0, 5);
-                mapping = _vendorMappings.FirstOrDefault(m =>
-                    m.MacPrefix.StartsWith(prefix5Char, StringComparison.OrdinalIgnoreCase));
-
-                if (mapping != null)
-                {
-                    return mapping.VendorName;
-                }
-            }
-
-            return "Unknown";
+            return mapping?.VendorName ?? "Unknown";
         }
 
         /// <summary>
